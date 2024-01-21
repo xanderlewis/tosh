@@ -14,3 +14,5 @@
 - [ ] add: variable number of levels in cwd path in prompt
 - [x] add: sync global shell options/variables with environment variables
 - [ ] extract path expansion logic from argument parsing function; allow it to be used in parsing of other paths
+- [ ] add: pipes!
+- [ ] add: filename completion

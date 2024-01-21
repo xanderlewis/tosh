@@ -27,7 +27,7 @@ FILE *TOSH_HIST_FILE;
 
 // Global shell options (these are their defaults)
 char *TOSH_VERBOSE = "OFF";
-char *TOSH_PROMPT = "%n@%h %p ⊞ ";
+char *TOSH_PROMPT = "%n@%h %p 𝕋 ";
 char *TOSH_HIST_PATH = "/Users/xml/.tosh_history"; // "~/.tosh_history";
 char *TOSH_HIST_LEN = "1000";
 char *TOSH_CONFIG_PATH = "/Users/xml/.toshrc";
@@ -454,8 +454,12 @@ void tosh_bind_signals(void) {
 }
 
 void tosh_record_line(char *line) {
-	if (fwrite(line, sizeof(char), strlen(line), TOSH_HIST_FILE) == 0) {
-		fprintf(stderr, "tosh: I couldn't write anything to the history file. :(\n");
+	int linelen = strlen(line);
+	if (linelen == 0) {
+		return;
+	}
+	if (fwrite(line, sizeof(char), linelen, TOSH_HIST_FILE) < linelen) {
+		fprintf(stderr, "tosh: I couldn't write everything to the history file. :(\n");
 	} else {
 		fwrite("\n", sizeof(char), 1, TOSH_HIST_FILE);
 	}
