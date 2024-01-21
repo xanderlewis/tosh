@@ -11,22 +11,37 @@
 #define ON 1
 #define MAX_PROMPT 128
 
+#define RED   "\x1B[31m"
+#define GRN   "\x1B[32m"
+#define YEL   "\x1B[33m"
+#define BLU   "\x1B[34m"
+#define MAG   "\x1B[35m"
+#define CYN   "\x1B[36m"
+#define WHT   "\x1B[37m"
+#define BLD   "\033[1m"
+#define BLDRS "\033[0m"
+
+#define RESET "\x1B[0m"
+
 // Global variables
 int TOSH_VERBOSE = OFF;
-char TOSH_PROMPT[MAX_PROMPT] = "%n@%h %p λ ";
+char TOSH_PROMPT[MAX_PROMPT] = "%n@%h %p ⊞ ";
 
 // List of builtin command names.
 char *builtin_str[] = {
 	"cd",
+	"exec",
 	"help",
 	"quit" };
 
 // Forward declarations of builtins, and pointers to them.
 int tosh_cd(char **);
+int tosh_exec(char **);
 int tosh_help(char **);
 int tosh_quit(char **);
 int (*builtin_func[]) (char **) = {
 	&tosh_cd,
+	&tosh_exec,
 	&tosh_help,
 	&tosh_quit
 };
@@ -61,10 +76,11 @@ int main(int argc, char **argv) {
 // Forward declarations for tosh_loop()
 char *tosh_read_line(void);
 char **tosh_split_line(char *);
-int tosh_exec(char **);
+int tosh_execute(char **);
 void tosh_prompt(void);
 void tosh_expand(char **);
 
+/* The main loop: get command line, interpret and act on it, repeat. */
 void tosh_loop(void) {
 	char *line;
 	char **args;
@@ -84,7 +100,7 @@ void tosh_loop(void) {
 		tosh_expand(args);
 
 		// Run command (builtin or not)
-		status = tosh_exec(args);
+		status = tosh_execute(args);
 
 		// Free memory used to store command line and arguments (on the heap).
 		free(line);
@@ -112,6 +128,11 @@ char *tosh_read_line(void) {
 		fprintf(stderr, "tosh: memory allocation failed. :(\n");
 		exit(EXIT_FAILURE);
 	}
+	// If the first character is already EOF...
+	if ((c = getchar()) == EOF) {
+		exit(EXIT_SUCCESS);
+	}
+	ungetc(c, stdin);
 	while (1) {
 		// Read in a character; if we reach EOF or a newline, return the string.
 		if ((c = getchar()) == '\n' || c == EOF) {
@@ -173,7 +194,7 @@ char **tosh_split_line(char *line) {
 	return tokens;
 }
 
-/* (Attempt to) fork and exec a requested program */
+/* Fork and exec a requested external program */
 int tosh_launch(char **args) {
 	pid_t id, wpid;
 	int status;
@@ -209,7 +230,7 @@ int tosh_launch(char **args) {
 }
 
 /* Execute a command line (and either call an external program or a builtin).*/
-int tosh_exec(char **args) {
+int tosh_execute(char **args) {
 	int i;
 
 	if (args[0] == NULL) {
@@ -270,7 +291,7 @@ void tosh_prompt(void) {
 				case 'n':
 					// USERNAME
 					if ((username = getenv("USER")) != NULL) {
-						printf("%s", username);
+						printf(RED "%s" RESET, username);
 					} else {
 						fprintf(stderr, "tosh: I couldn't find your username. :(\n");
 					}
@@ -287,7 +308,7 @@ void tosh_prompt(void) {
 						}
 
 					}
-					printf("%s", buf);
+					printf(GRN "%s" RESET, buf);
 					break;
 			}
 		} else {
@@ -384,9 +405,20 @@ int tosh_cd(char **args) {
 	return 1;
 }
 
+/* Builtin wrapper for exec() syscall. */
+int tosh_exec(char **args) {
+	if (args[1] != NULL) {
+		if (execvp(args[1], args + 1) == -1) {
+			perror("tosh");
+		}
+	}
+	// (We should never end up here!)
+	return 0;
+}
+
 int tosh_help(char **args) {
 	int i;
-	printf("-- TOSH --\n");
+	printf(BLD "TOSH -- a very simple shell.\n" BLDRS);
 	printf("Type program names and arguments, and hit enter.\n");
 	printf("The following are built in:\n");
 

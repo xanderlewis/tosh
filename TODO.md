@@ -3,10 +3,11 @@
 - [ ] add: quoting in arguments
 - [ ] add: reading from config file at startup
 - [ ] add: reading from config on builtin command
-- [ ] *silly, but..* make it look more fancy (somehow).
+- [x] *silly, but..* make it look more fancy (somehow).
 - [x] add: prompt that includes working directory (look up some number of levels)
 - [x] add: expansion of `~` into `HOME` environment variable
 - [ ] add: filename globbing?
 - [x] add: invocation of `cd` without arguments
-- [ ] fix: infinite loop on EOF
+- [x] fix: infinite loop on EOF
 - [ ] fix: memory leak that happens when expanding arguments
+- [ ] add: up arrow gives history
