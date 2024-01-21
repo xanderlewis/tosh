@@ -6,8 +6,11 @@
 - [x] *silly, but..* make it look more fancy (somehow).
 - [x] add: prompt that includes working directory (look up some number of levels)
 - [x] add: expansion of `~` into `HOME` environment variable
-- [ ] add: filename globbing?
+- [ ] add: filename globbing (at least expanding a \*)
 - [x] add: invocation of `cd` without arguments
 - [x] fix: infinite loop on EOF
 - [ ] fix: memory leak that happens when expanding arguments
 - [ ] add: up arrow gives history
+- [ ] add: variable number of levels in cwd path in prompt
+- [x] add: sync global shell options/variables with environment variables
+- [ ] extract path expansion logic from argument parsing function; allow it to be used in parsing of other paths
