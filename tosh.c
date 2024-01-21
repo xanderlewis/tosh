@@ -5,24 +5,21 @@
 #include <unistd.h> /* POSIX syscall stuff */
 #include <string.h> /* strtok() and strcmp() */
 #include <sys/wait.h> /* waitpid() */
+#include <signal.h> /* signal(), various macros, etc. */
 
 #define OFF 0
 #define ON 1
-
-/* Some settings that, for now, are defined as macros. Later, I will add
- * the ability to edit these from the shell (or, equivalently, from a
- * config file.) */
-#define PS1 "yes? "
+#define MAX_PROMPT 128
 
 // Global variables
 int TOSH_VERBOSE = OFF;
+char TOSH_PROMPT[MAX_PROMPT] = "%n@%h %p λ ";
 
 // List of builtin command names.
 char *builtin_str[] = {
 	"cd",
 	"help",
-	"quit"
-};
+	"quit" };
 
 // Forward declarations of builtins, and pointers to them.
 int tosh_cd(char **);
@@ -41,15 +38,23 @@ int tosh_num_builtins() {
 
 // Forward declarations for main()
 void tosh_loop(void);
+void tosh_parse_args(int, char **);
+void tosh_bind_signals(void);
 
 int main(int argc, char **argv) {
+	// Parse arguments to tosh
+	tosh_parse_args(argc, argv);
+
 	// Load config file.
 	// [none, for now.]
+	
+	// Set up signal handlers
+	tosh_bind_signals();
 	
 	// Run command loop.
 	tosh_loop();
 
-	// Shutdown/cleanup.
+	// GREAT SUCCESS!!!
 	return EXIT_SUCCESS;
 }
 
@@ -57,15 +62,17 @@ int main(int argc, char **argv) {
 char *tosh_read_line(void);
 char **tosh_split_line(char *);
 int tosh_exec(char **);
+void tosh_prompt(void);
+void tosh_expand(char **);
 
 void tosh_loop(void) {
 	char *line;
 	char **args;
-	int status;
+	int status, i;
 
 	do {
 		// Show the prompt
-		printf(PS1);
+		tosh_prompt();
 
 		// Read in a line from stdin
 		line = tosh_read_line();
@@ -73,12 +80,20 @@ void tosh_loop(void) {
 		// Split line into arguments
 		args = tosh_split_line(line);
 
+		// Perform expansions on arguments
+		tosh_expand(args);
+
 		// Run command (builtin or not)
 		status = tosh_exec(args);
 
-		// (these strings live on the heap; we must free them.)
+		// Free memory used to store command line and arguments (on the heap).
 		free(line);
 		free(args);
+
+		// Free memory used for individual arguments (some may have been expanded).
+		/*for (i = 0; args[i] != NULL; i++) {
+			free(args[i]);
+		}*/
 	} while (status);
 }
 
@@ -99,7 +114,7 @@ char *tosh_read_line(void) {
 	}
 	while (1) {
 		// Read in a character; if we reach EOF or a newline, return the string.
-		if ((c = getchar()) == EOF || c == '\n') {
+		if ((c = getchar()) == '\n' || c == EOF) {
 			buf[i++] = '\0';
 			return buf;
 		} else {
@@ -158,6 +173,7 @@ char **tosh_split_line(char *line) {
 	return tokens;
 }
 
+/* (Attempt to) fork and exec a requested program */
 int tosh_launch(char **args) {
 	pid_t id, wpid;
 	int status;
@@ -192,6 +208,7 @@ int tosh_launch(char **args) {
 	return 1;
 }
 
+/* Execute a command line (and either call an external program or a builtin).*/
 int tosh_exec(char **args) {
 	int i;
 
@@ -207,6 +224,9 @@ int tosh_exec(char **args) {
 	for (i = 0; i < tosh_num_builtins(); i++) {
 		if (strcmp(args[0], builtin_str[i]) == 0) {
 			// Run the builtin, and return.
+			if (TOSH_VERBOSE) {
+				printf("[launching builtin %s]\n", args[0]);
+			}
 			return (*builtin_func[i])(args);
 		}
 	}
@@ -215,9 +235,146 @@ int tosh_exec(char **args) {
 	return tosh_launch(args);
 }
 
+// Increment for buffers related to showing the prompt.
+#define PROMPT_BUF_INC 1024
+
+/* show the prompt according to the global variable TOSH_PROMPT */
+void tosh_prompt(void) {
+	int i, c;
+	int bufsize = PROMPT_BUF_INC;
+	char *buf = malloc(bufsize * sizeof(char));
+	if (buf == NULL) {
+		fprintf(stderr, "tosh: memory allocation failed. :(\n");
+		exit(EXIT_FAILURE);
+	}
+	char *username;
+
+	for (i = 0; (c = TOSH_PROMPT[i]) != '\0'; i++) {
+		if (c == '%') {
+			// Parse specifiers.
+			switch (TOSH_PROMPT[++i]) {
+				case 'p':
+					// CURRENT WORKING DIRECTORY (FOR NOW, ABSOLUTE PATH)
+					while (getcwd(buf, bufsize) == NULL) {
+						// Buffer overflow; reallocate.
+						bufsize += PROMPT_BUF_INC;
+						buf = realloc(buf, bufsize);
+						if (buf == NULL) {
+							fprintf(stderr, "tosh: memory allocation failed. :(\n");
+							exit(EXIT_FAILURE);
+						}
+					}
+					printf("%s", buf);
+					break;
+
+				case 'n':
+					// USERNAME
+					if ((username = getenv("USER")) != NULL) {
+						printf("%s", username);
+					} else {
+						fprintf(stderr, "tosh: I couldn't find your username. :(\n");
+					}
+					break;
+				case 'h':
+					// HOSTNAME
+					while (gethostname(buf, bufsize) != 0) {
+						// Buffer overflow; reallocate.
+						bufsize += PROMPT_BUF_INC;
+						buf = realloc(buf, bufsize);
+						if (buf == NULL) {
+							fprintf(stderr, "tosh: memory allocation failed. :(\n");
+							exit(EXIT_FAILURE);
+						}
+
+					}
+					printf("%s", buf);
+					break;
+			}
+		} else {
+			printf("%c", c);
+		}
+	}
+	free(buf);
+	fflush(stdout);
+}
+
+void tosh_expand(char **args) {
+	int c, i, j, homedirlen, arglen;
+	char *homedir, *original_arg;
+	for (i = 0; args[i] != NULL; i++) {
+		for (j = 0; (c = args[i][j]) != '\0'; j++) {
+			switch (c) {
+				case '~':
+					// Get $HOME.
+					if ((homedir = getenv("HOME")) == NULL) {
+						fprintf(stderr, "tosh: I couldn't find your home directory. :(\n");
+					} else {
+						// Expand tilde.
+						homedirlen = strlen(homedir);
+						arglen = strlen(args[i]);
+
+						original_arg = malloc(arglen * sizeof(char));
+						strcpy(original_arg, args[i]);
+
+						args[i] = malloc((arglen - 1 + homedirlen + 1) * sizeof(char));
+
+						memcpy(args[i], original_arg, j);
+						memcpy(args[i] + j, homedir, homedirlen);
+						memcpy(args[i] + j + homedirlen, original_arg + j + 1, arglen - j - 1);
+						args[i][j + homedirlen + arglen + j + 1] = '\0';
+						free(original_arg);
+					}
+					break;
+				default:
+					break;
+			}
+		}
+	}
+}
+
+void tosh_parse_args(int argc, char **argv) {
+	int i, j;
+	if (argc == 1) {
+		return;
+	}
+	// Iterate over arguments.
+	for (i = 1; i < argc; i++) {
+		if (argv[i][0] == '-') {
+			// Parse flags.
+			for (j = 1; argv[i][j] != '\0'; j++) {
+				switch (argv[i][j]) {
+					case 'v':
+						TOSH_VERBOSE = ON;
+						break;
+					default:
+						fprintf(stderr, "tosh: I don't know the option '%c'.\n", argv[i][j]);
+						break;
+				}
+			}
+		}
+	}
+}
+
+void tosh_sigint(int sig) {
+	if (TOSH_VERBOSE) {
+		printf("\nRecieved a SIGINT!\n");
+	}
+	exit(EXIT_SUCCESS);
+}
+
+void tosh_bind_signals() {
+	signal(SIGINT, tosh_sigint);
+}
+
+/* -- BUILTINS BELOW -- */
+
 int tosh_cd(char **args) {
 	if (args[1] == NULL) {
-		fprintf(stderr, "tosh: expected argument to \"cd\"\n");
+		char *homedir = getenv("HOME");
+		if (homedir != NULL) {
+			args[1] = homedir;
+			return tosh_cd(args);
+		}
 	} else {
 		// Attempt to change working directory of (this) process.
 		if (chdir(args[1]) != 0) {
