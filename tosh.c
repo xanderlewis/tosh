@@ -6,31 +6,51 @@
 #include <string.h> /* strtok() and strcmp() */
 #include <sys/wait.h> /* waitpid() */
 #include <signal.h> /* signal(), various macros, etc. */
+#include "getchar_unbuf.h"
 
 #define MAX_PROMPT 128
 
-#define RED   "\x1B[31m"
-#define GRN   "\x1B[32m"
-#define YEL   "\x1B[33m"
-#define BLU   "\x1B[34m"
-#define MAG   "\x1B[35m"
-#define CYN   "\x1B[36m"
-#define WHT   "\x1B[37m"
-#define BLD   "\033[1m"
-#define BLDRS "\033[0m"
-#define RESET "\x1B[0m"
+#define RED    "\x1B[31m"
+#define GRN    "\x1B[32m"
+#define YEL    "\x1B[33m"
+#define BLU    "\x1B[34m"
+#define MAG    "\x1B[35m"
+#define CYN    "\x1B[36m"
+#define WHT    "\x1B[37m"
+#define BLD    "\033[1m"
+#define BLDRS  "\033[0m"
+#define RESET  "\x1B[0m"
 
 #define UPARRW "^[[A"
+#define CGRTN  13
+
+#define DEBUG_LOG(A, ...) if (strcmp(TOSH_DEBUG, "ON") == 0) {\
+			  	printf(BLD "log: " A BLDRS "\n", __VA_ARGS__);\
+			  }	
+
+char *tosh_colours[] = {
+	RED,
+	GRN,
+	YEL,
+	BLU,
+	MAG,
+	CYN,
+	WHT
+};
+int tosh_num_colours(void) {
+	return sizeof(tosh_colours) / sizeof(char *);
+}
 
 // Global variables
 FILE *TOSH_HIST_FILE;
 
 // Global shell options (these are their defaults)
 char *TOSH_VERBOSE = "OFF";
-char *TOSH_PROMPT = "%n@%h %p 𝕋 ";
+char *TOSH_PROMPT = "%n@%h %pr ⟡ ";
 char *TOSH_HIST_PATH = "/Users/xml/.tosh_history"; // "~/.tosh_history";
 char *TOSH_HIST_LEN = "1000";
 char *TOSH_CONFIG_PATH = "/Users/xml/.toshrc";
+char *TOSH_DEBUG = "OFF";
 
 // List of global shell options (that can be get and set via environment variables)
 char *glob_vars_str[] = {
@@ -38,14 +58,16 @@ char *glob_vars_str[] = {
 	"TOSH_PROMPT",
 	"TOSH_HIST_PATH",
 	"TOSH_HIST_LEN",
-	"TOSH_CONFIG_PATH"
+	"TOSH_CONFIG_PATH",
+	"TOSH_DEBUG"
 };
 char **glob_vars[] = {
 	&TOSH_VERBOSE,
 	&TOSH_PROMPT,
 	&TOSH_HIST_PATH,
 	&TOSH_HIST_LEN,
-	&TOSH_CONFIG_PATH
+	&TOSH_CONFIG_PATH,
+	&TOSH_DEBUG
 };
 
 // Number of global shell options
@@ -158,8 +180,8 @@ void tosh_loop(void) {
 			free(args[i]);
 		}*/
 
-		// Once tosh_execute returns zero, the shell terminates.
-	} while (status);
+		
+	} while (status); // Once tosh_execute returns zero, the shell terminates.
 }
 
 // Buffer increment for read_line function.
@@ -178,22 +200,26 @@ char *tosh_read_line(void) {
 		exit(EXIT_FAILURE);
 	}
 	// If the first character is already EOF...
-	if ((c = getchar()) == EOF) {
+	if ((c = getchar_unbuf()) == EOF) {
+		DEBUG_LOG("first char was EOF.", NULL)
 		exit(EXIT_SUCCESS);
 	}
 	ungetc(c, stdin);
 	while (1) {
 		// Read in a character; if we reach EOF or a newline, return the string.
-		if ((c = getchar()) == '\n' || c == EOF) {
+		if ((c = getchar_unbuf()) == '\n' || c == EOF || c == CGRTN) {
+			DEBUG_LOG("got %02x.", c)
 			buf[i++] = '\0';
 			return buf;
 		} else {
+			DEBUG_LOG("got char %c.", c)
 			buf[i++] = c;
 		}
 
 		// If we've exceed the buffer...
 		if (i >= bufsize) {
 			// Ask for READ_BUF_INC more bytes.
+			DEBUG_LOG("realloc'ing while reading line (%d more bytes)...", READ_BUF_INC)
 			bufsize += READ_BUF_INC;
 			buf = realloc(buf, bufsize);
 			if (!buf) {
@@ -305,6 +331,9 @@ int tosh_execute(char **args) {
 	return tosh_launch(args);
 }
 
+// Forward declarations for tosh_prompt()
+void tosh_show_path(char *, int);
+
 // Increment for buffers related to showing the prompt.
 #define PROMPT_BUF_INC 1024
 
@@ -319,12 +348,13 @@ void tosh_prompt(void) {
 	}
 	char *username;
 
+	// Parse TOSH_PROMPT string...
 	for (i = 0; (c = TOSH_PROMPT[i]) != '\0'; i++) {
 		if (c == '%') {
 			// Parse specifiers.
 			switch (TOSH_PROMPT[++i]) {
 				case 'p':
-					// CURRENT WORKING DIRECTORY (FOR NOW, ABSOLUTE PATH)
+					// CURRENT WORKING DIRECTORY (FOR NOW, THE ABSOLUTE PATH)
 					while (getcwd(buf, bufsize) == NULL) {
 						// Buffer overflow; reallocate.
 						bufsize += PROMPT_BUF_INC;
@@ -334,7 +364,12 @@ void tosh_prompt(void) {
 							exit(EXIT_FAILURE);
 						}
 					}
-					printf("%s", buf);
+					if (TOSH_PROMPT[i+1] == 'r') {
+						tosh_show_path(buf, 1);
+						i++;
+					} else {
+						tosh_show_path(buf, 0);
+					}
 					break;
 
 				case 'n':
@@ -423,6 +458,20 @@ void tosh_parse_args(int argc, char **argv) {
 			}
 		}
 	}
+}
+
+/* Print the given (absolute) path to stdout, possibly colouring it. */
+void tosh_show_path(char *path, int rainbow) {
+	//DEBUG_LOG("\npath is %s", path);
+	char *component = strtok(path, "/");
+	int i = 0;
+	if (path[0] == '/')
+		printf("/");
+	do {
+		printf("%s%s", (rainbow) ? tosh_colours[i++] : "", component);
+		printf("%s/", (rainbow) ? RESET : "");
+		i = (i + 1) % tosh_num_colours();
+	} while ((component = strtok(NULL, "/")) != NULL);
 }
 
 /* Get and set environment variables to align with global (internal) shell variables.
