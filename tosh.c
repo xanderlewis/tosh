@@ -44,7 +44,7 @@ int tosh_num_colours(void) {
 // Global variables
 FILE *TOSH_HIST_FILE;
 
-// Global shell options (these are their defaults)
+// Global shell options/variables (these are their defaults)
 char *TOSH_VERBOSE = "OFF";
 char *TOSH_PROMPT = "%n@%h %pr ⟡ ";
 char *TOSH_HIST_PATH = "/Users/xml/.tosh_history"; // "~/.tosh_history";
@@ -52,7 +52,7 @@ char *TOSH_HIST_LEN = "1000";
 char *TOSH_CONFIG_PATH = "/Users/xml/.toshrc";
 char *TOSH_DEBUG = "OFF";
 
-// List of global shell options (that can be get and set via environment variables)
+// List of global shell options/variables (that can be get and set via environment variables)
 char *glob_vars_str[] = {
 	"TOSH_VERBOSE",
 	"TOSH_PROMPT",
@@ -467,11 +467,12 @@ void tosh_show_path(char *path, int rainbow) {
 	int i = 0;
 	if (path[0] == '/')
 		printf("/");
-	do {
+	while (component != NULL) {
 		printf("%s%s", (rainbow) ? tosh_colours[i++] : "", component);
 		printf("%s/", (rainbow) ? RESET : "");
 		i = (i + 1) % tosh_num_colours();
-	} while ((component = strtok(NULL, "/")) != NULL);
+		component = strtok(NULL, "/");
+	}
 }
 
 /* Get and set environment variables to align with global (internal) shell variables.
@@ -564,13 +565,13 @@ int tosh_exec(char **args) {
 
 int tosh_help(char **args) {
 	int i;
-	printf(BLD "TOSH -- a very simple shell.\n" BLDRS);
+	printf(BLD "TOSH — a very simple shell.\n" BLDRS);
 	printf("Type program names and arguments, and hit enter.\n");
 	printf("The following are built in:\n");
 
 	// List the builtins, according to the strings stored.
 	for (i = 0; i < tosh_num_builtins(); i++) {
-		printf("  %s\n", builtin_str[i]);
+		printf("- %s\n", builtin_str[i]);
 	}
 
 	return 1;
