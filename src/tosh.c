@@ -11,6 +11,7 @@
 #include "tosh.h"
 
 #define MAX_PROMPT 128
+#define TOSH_COMMENT_CHAR '#'
 
 #define RED    "\x1B[31m"
 #define GRN    "\x1B[32m"
@@ -169,10 +170,6 @@ void tosh_loop(void) {
 		// Split line into arguments.
 		args = tosh_split_line(line);
 
-		/* (args is of type char**: it points to the first arg
-		 * (which is a pointer to its first char); incrementing
-		 * gives the next arg, and so on.) */
-
 		// Perform expansions on arguments.
 		args = tosh_expand_args(args);
 
@@ -241,6 +238,10 @@ char *tosh_read_line(void) {
 // What we consider whitespace between program arguments.
 #define SPLIT_DELIM " \t\r\n\a"
 
+/* Split up the given line into a vector of (string) arguments, ignoring everything after a
+ * comment character.
+ * NOTE: a # not following whitespace (that is, not separated from what it precedes) will be
+ *       taken literally. */
 char **tosh_split_line(char *line) {
 	// Start with SPLIT_BUF_INC bytes.
 	int bufsize = SPLIT_BUF_INC;
@@ -258,7 +259,7 @@ char **tosh_split_line(char *line) {
 
 	// Tokenise the line, and get the first token back (or NULL).
 	token = strtok(line, SPLIT_DELIM);
-	while (token != NULL) {
+	while (token != NULL && token[0] != TOSH_COMMENT_CHAR) {
 		tokens[i++] = token;
 
 		// If we've exceeded the buffer, attempt to reallocate.
@@ -289,6 +290,8 @@ char **tosh_split_line(char *line) {
 		}
 		tokens[i] = p;
 	}
+
+	DEBUG_LOG("returning tokens after splitting...", NULL)
 	return tokens;
 }
 
@@ -333,7 +336,7 @@ int tosh_execute(char **args) {
 
 	if (args[0] == NULL) {
 		// Didn't type anything in...
-		if (strcmp(TOSH_VERBOSE, "ON") == 0) {
+		if (strcmp(TOSH_VERBOSE, "ON") == 0 && isatty(fileno(stdin))) {
 			printf("\n...what do you want to do?\n");
 		}
 		return 1;
@@ -464,32 +467,55 @@ char *tosh_expand_string(char *str) {
 char **tosh_glob_string(char *);
 void tosh_glob_free(void);
 
+#define TOSH_EXPAND_BUF_INC 64
+
 /* Perform expansion on each of the arguments in the argument vector. */
 char **tosh_expand_args(char **args) {
-	int i, j;
+	int i, j, k = 0;
+	int bufsize = TOSH_EXPAND_BUF_INC;
 	char **globbed, **newargs, *matchedstr;
+
+	newargs = malloc(bufsize * sizeof(char *));
 	// Iterate through args, replacing them with their expansions.
 	for (i = 0; args[i] != NULL; i++) {
 		DEBUG_LOG("expanding arg: %s...", args[i]);
 		// Expand stuff like tilde.
-		newargs[i] = tosh_expand_string(args[i]);
+		args[i] = tosh_expand_string(args[i]);
+		DEBUG_LOG("expanded into %s.", args[i]);
 		// Perform globbing using metacharacters.
 		if ((globbed = tosh_glob_string(args[i])) == NULL) {
 			// If nothing matched, leave it as it was. (this behaviour is perhaps debatable?)
-			newargs[i] = args[i];
+			DEBUG_LOG("nothing matched.", NULL)
+			DEBUG_LOG("copying %s...", args[i])
+			newargs[k++] = args[i];
+
+			// Increase buffer size (total number of arguments) if necessary.
+			if (k >= bufsize) {
+				bufsize += TOSH_EXPAND_BUF_INC;
+				newargs = realloc(newargs, bufsize * sizeof(char));
+			}
 		} else {
 			// If matched, add in matches as new args.
-			for (j = 0; (matchedstr = globbed[j]) != NULL; j++, i++) {
+			for (j = 0; (matchedstr = globbed[j]) != NULL; j++) {
 				// Copy globbed filename (this will be deallocated in tosh_loop()).
-				newargs[i] = malloc((strlen(matchedstr) + 1) * sizeof(char));
-				strcpy(newargs[i], matchedstr);
+				DEBUG_LOG("found %s.", matchedstr)
+				newargs[k] = malloc((strlen(matchedstr) + 1) * sizeof(char));
+				strcpy(newargs[k++], matchedstr);
+
+				// Increase buffer size (total number of arguments) if necessary.
+				if (k >= bufsize) {
+					bufsize += TOSH_EXPAND_BUF_INC;
+					newargs = realloc(newargs, bufsize * sizeof(char));
+				}
+
 			}
 		}
 	}
+	// Free glob structure if we used it.
+	if (i > 0)
+		tosh_glob_free();
 
-	tosh_glob_free();
-
-	return args;
+	return newargs;
 }
 
 void tosh_parse_args(int argc, char **argv) {
@@ -514,6 +540,12 @@ void tosh_parse_args(int argc, char **argv) {
 						break;
 				}
 			}
+		} else {
+			// Non-flag arguments...
+			// Attempt to read commands from the specified file, and ignore the rest.
+			DEBUG_LOG("reading from file '%s'...", argv[i])
+			freopen(argv[i], "r", stdin);
+			return;	
 		}
 	}
 }

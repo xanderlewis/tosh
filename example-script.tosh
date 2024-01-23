@@ -1,0 +1,4 @@
+# This is a script for tosh to read.
+date
+echo Hello! This is a script. :-)
+ls -lt

@@ -22,4 +22,6 @@
 - [ ] add: parameter/environment variable substitution
 - [x] fix: silly segfault when getting close to root directory
 - [x] fix: memory leak relating to globfree() and args pointers
-- [ ] add: take a file as an argument (not just into stdin)
+- [x] add: take a file as an argument (not just into stdin)
+- [x] fix: bug where things after `*` get dropped
+- [x] add: ignore `#` comments
