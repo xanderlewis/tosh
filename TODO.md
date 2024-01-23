@@ -6,14 +6,17 @@
 - [x] *silly, but..* make it look more fancy (somehow).
 - [x] add: prompt that includes working directory (look up some number of levels)
 - [x] add: expansion of `~` into `HOME` environment variable
-- [ ] add: filename globbing (at least expanding a `*`)
+- [ ] add: filename globbing (pattern matching with `*` and `?`)
 - [x] add: invocation of `cd` without arguments
 - [x] fix: infinite loop on EOF
-- [ ] fix: memory leak that happens when expanding arguments
+- [x] fix: memory leak that happens when expanding arguments
 - [ ] add: up arrow gives history
 - [ ] add: variable number of levels in cwd path in prompt
 - [x] add: sync global shell options/variables with environment variables
-- [ ] extract path expansion logic from argument parsing function; allow it to be used in parsing of other paths
+- [x] extract path expansion logic from argument parsing function; allow it to be used in parsing of other paths
 - [ ] add: pipes!
-- [ ] add: filename completion
+- [ ] add: I/O redirection
+- [ ] add: tab completion
+- [ ] add: filename completion in current working directory
 - [x] add: rainbow path (add an extra flag for this in the prompt string)
+- [ ] add: maximum length of history file; keep a buffer in memory and write it out when exiting

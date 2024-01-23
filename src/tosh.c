@@ -6,7 +6,8 @@
 #include <string.h> /* strtok() and strcmp() */
 #include <sys/wait.h> /* waitpid() */
 #include <signal.h> /* signal(), various macros, etc. */
-#include "getchar_unbuf.h"
+#include <glob.h>
+#include "tosh.h"
 
 #define MAX_PROMPT 128
 
@@ -22,7 +23,6 @@
 #define RESET  "\x1B[0m"
 
 #define UPARRW "^[[A"
-#define CGRTN  13
 
 #define DEBUG_LOG(A, ...) if (strcmp(TOSH_DEBUG, "ON") == 0) {\
 			  	printf(BLD "log: " A BLDRS "\n", __VA_ARGS__);\
@@ -47,9 +47,9 @@ FILE *TOSH_HIST_FILE;
 // Global shell options/variables (these are their defaults)
 char *TOSH_VERBOSE = "OFF";
 char *TOSH_PROMPT = "%n@%h %pr ⟡ ";
-char *TOSH_HIST_PATH = "/Users/xml/.tosh_history"; // "~/.tosh_history";
-char *TOSH_HIST_LEN = "1000";
-char *TOSH_CONFIG_PATH = "/Users/xml/.toshrc";
+char *TOSH_HIST_PATH = "~/.tosh_history";
+char *TOSH_HIST_LEN = "10000";
+char *TOSH_CONFIG_PATH = "~/.toshrc";
 char *TOSH_DEBUG = "OFF";
 
 // List of global shell options/variables (that can be get and set via environment variables)
@@ -139,7 +139,7 @@ char *tosh_read_line(void);
 char **tosh_split_line(char *);
 int tosh_execute(char **);
 void tosh_prompt(void);
-void tosh_expand(char **);
+char **tosh_expand_args(char **);
 void tosh_sync_env_vars(void);
 void tosh_record_line(char *);
 
@@ -165,22 +165,23 @@ void tosh_loop(void) {
 		// Split line into arguments.
 		args = tosh_split_line(line);
 
+		/* (args is of type char**: it points to the first arg
+		 * (which is a pointer to its first char); incrementing
+		 * gives the next arg, and so on.) */
+
 		// Perform expansions on arguments.
-		tosh_expand(args);
+		args = tosh_expand_args(args);
 
 		// Run command (builtin or not).
 		status = tosh_execute(args);
 
 		// Free memory used to store command line and arguments (on the heap).
 		free(line);
+		for (i = 0; args[i] != NULL; i++) {
+			free(args[i]);
+		}
 		free(args);
 
-		// Free memory used for individual arguments (some may have been expanded).
-		/*for (i = 0; args[i] != NULL; i++) {
-			free(args[i]);
-		}*/
-
-		
 	} while (status); // Once tosh_execute returns zero, the shell terminates.
 }
 
@@ -207,13 +208,13 @@ char *tosh_read_line(void) {
 	ungetc(c, stdin);
 	while (1) {
 		// Read in a character; if we reach EOF or a newline, return the string.
-		if ((c = getchar_unbuf()) == '\n' || c == EOF || c == CGRTN) {
-			DEBUG_LOG("got %02x.", c)
+		if ((c = getchar_unbuf()) == '\n' || c == EOF) {
 			buf[i++] = '\0';
+			DEBUG_LOG("finished reading line with %02x.", c)
 			return buf;
 		} else {
-			DEBUG_LOG("got char %c.", c)
 			buf[i++] = c;
+			DEBUG_LOG("got char %c.", c)
 		}
 
 		// If we've exceed the buffer...
@@ -230,17 +231,20 @@ char *tosh_read_line(void) {
 	}
 }
 
-// Buffer increment for split function.
-#define SPLIT_BUF_INC 64;
+// Buffer increments for split function.
+#define SPLIT_BUF_INC 64
+#define ARG_BUF_INC 128
 // What we consider whitespace between program arguments.
 #define SPLIT_DELIM " \t\r\n\a"
 
 char **tosh_split_line(char *line) {
 	// Start with SPLIT_BUF_INC bytes.
 	int bufsize = SPLIT_BUF_INC;
-	int i = 0;
+	int arg_bufsize = ARG_BUF_INC;
+	int i = 0, j;
 	char **tokens = malloc(bufsize * sizeof(char *));
 	char *token;
+	char c;
 
 	// If malloc fails...
 	if (!tokens) {
@@ -266,6 +270,21 @@ char **tosh_split_line(char *line) {
 		token = strtok(NULL, SPLIT_DELIM);
 	}
 	tokens[i] = NULL;
+	
+	// Replace each element of `tokens` with a dynamically-allocated string (a copy of the original string at that point).
+	for (i = 0; tokens[i] != NULL; i++) {
+		char *p = malloc(arg_bufsize * sizeof(char));
+		for (j = 0; (c = tokens[i][j]) != '\0'; j++) {
+			if (j >= arg_bufsize) {
+				arg_bufsize += ARG_BUF_INC;
+				DEBUG_LOG("realloc'ing whilst reading in argument (%d more bytes)...", ARG_BUF_INC)
+				p = realloc(p, arg_bufsize * sizeof(char));
+			}
+			p[j] = tokens[i][j];
+			DEBUG_LOG("copied char %c.", c)
+		}
+		tokens[i] = p;
+	}
 	return tokens;
 }
 
@@ -403,38 +422,45 @@ void tosh_prompt(void) {
 	fflush(stdout);
 }
 
-void tosh_expand(char **args) {
-	int c, i, j, homedirlen, arglen;
-	char *homedir, *original_arg;
-	for (i = 0; args[i] != NULL; i++) {
-		for (j = 0; (c = args[i][j]) != '\0'; j++) {
-			switch (c) {
-				case '~':
-					// Get $HOME.
-					if ((homedir = getenv("HOME")) == NULL) {
-						fprintf(stderr, "tosh: I couldn't find your home directory. :(\n");
-					} else {
-						// Expand tilde.
-						homedirlen = strlen(homedir);
-						arglen = strlen(args[i]);
+/* Expand the given string (could be a command argument, or else) according to tosh's expansion rules.
+ * NOTE: takes a char pointer that is assumed to have been malloc'd earlier; requires freeing later.
+ *       this function is recursive; possibly not particularly efficient. */
+char *tosh_expand_string(char *str) {
+	char *homedir, *tildeloc, *remstr;
 
-						original_arg = malloc(arglen * sizeof(char));
-						strcpy(original_arg, args[i]);
-
-						args[i] = malloc((arglen - 1 + homedirlen + 1) * sizeof(char));
-
-						memcpy(args[i], original_arg, j);
-						memcpy(args[i] + j, homedir, homedirlen);
-						memcpy(args[i] + j + homedirlen, original_arg + j + 1, arglen - j - 1);
-						args[i][j + homedirlen + arglen + j + 1] = '\0';
-						free(original_arg);
-					}
-					break;
-				default:
-					break;
-			}
-		}
+	if ((homedir = getenv("HOME")) == NULL) {
+		fprintf(stderr, "tosh: I couldn't find your home directory. :(\n");
+		return str;
 	}
+
+	str = realloc(str, (strlen(str) - 1 + strlen(homedir) + 1) * sizeof(char));
+
+	if ((tildeloc = strchr(str, '~')) == NULL) {
+		return str;
+	}
+
+	// Copy remainder of string
+	remstr = malloc((strlen(tildeloc) + 1) * sizeof(char));
+	strcpy(remstr, tildeloc + 1);
+	// Copy value of HOME from tilde onwards
+	strcpy(tildeloc, homedir);
+	// Copy rest of string after HOME
+	strcpy(tildeloc + strlen(homedir), remstr);
+	free(remstr);
+	
+	return tosh_expand_string(str);
+}
+
+/* Perform expansion on each of the arguments in the argument vector. */
+char **tosh_expand_args(char **args) {
+	int i;
+	// Iterate through args, replacing them with their expansions.
+	for (i = 0; args[i] != NULL; i++) {
+		DEBUG_LOG("expanding arg: %s.", args[i]);
+		args[i] = tosh_expand_string(args[i]);
+	}
+
+	return args;
 }
 
 void tosh_parse_args(int argc, char **argv) {
@@ -517,7 +543,15 @@ void tosh_record_line(char *line) {
 }
 
 void tosh_open_hist(void) {
-	TOSH_HIST_FILE = fopen(TOSH_HIST_PATH, "a+");
+	char *path, *expanded_path;
+
+	path = malloc((strlen(TOSH_HIST_PATH) + 1) * sizeof(char));
+	strcpy(path, TOSH_HIST_PATH);
+	expanded_path = tosh_expand_string(path);
+
+	TOSH_HIST_FILE = fopen(expanded_path, "a+");
+	free(expanded_path);
+
 	if (TOSH_HIST_FILE == NULL) {
 		perror("tosh");
 		fprintf(stderr, "tosh: I couldn't open the history file. :(\n");
@@ -565,7 +599,7 @@ int tosh_exec(char **args) {
 
 int tosh_help(char **args) {
 	int i;
-	printf(BLD "TOSH — a very simple shell.\n" BLDRS);
+	printf(BLD "\n---=== TOSH — a very simple shell. ===---\n" BLDRS);
 	printf("Type program names and arguments, and hit enter.\n");
 	printf("The following are built in:\n");
 
@@ -573,6 +607,7 @@ int tosh_help(char **args) {
 	for (i = 0; i < tosh_num_builtins(); i++) {
 		printf("- %s\n", builtin_str[i]);
 	}
+	printf("\n");
 
 	return 1;
 }
