@@ -156,8 +156,9 @@ void tosh_loop(void) {
 		// Sync with environment variables.
 		tosh_sync_env_vars();
 		
-		// Show the prompt.
-		tosh_prompt();
+		// Show the prompt (if we're talking to a tty).
+		if (isatty(fileno(stdin)))
+			tosh_prompt();
 
 		// Read in a line from stdin.
 		line = tosh_read_line();
