@@ -7,6 +7,7 @@
 #include <sys/wait.h> /* waitpid() */
 #include <signal.h> /* signal(), various macros, etc. */
 #include <glob.h>
+#include <ctype.h>
 #include "tosh.h"
 
 #define MAX_PROMPT 128
@@ -28,6 +29,8 @@
 			  	printf(BLD "log: " A BLDRS "\n", __VA_ARGS__);\
 			  }	
 
+// Global variables
+FILE *TOSH_HIST_FILE;
 char *tosh_colours[] = {
 	RED,
 	GRN,
@@ -41,12 +44,9 @@ int tosh_num_colours(void) {
 	return sizeof(tosh_colours) / sizeof(char *);
 }
 
-// Global variables
-FILE *TOSH_HIST_FILE;
-
 // Global shell options/variables (these are their defaults)
 char *TOSH_VERBOSE = "OFF";
-char *TOSH_PROMPT = "%n@%h %pr ⟡ ";
+char *TOSH_PROMPT = "%n@%h %p2r ⟡ ";
 char *TOSH_HIST_PATH = "~/.tosh_history";
 char *TOSH_HIST_LEN = "10000";
 char *TOSH_CONFIG_PATH = "~/.toshrc";
@@ -57,7 +57,6 @@ char *glob_vars_str[] = {
 	"TOSH_VERBOSE",
 	"TOSH_PROMPT",
 	"TOSH_HIST_PATH",
-	"TOSH_HIST_LEN",
 	"TOSH_CONFIG_PATH",
 	"TOSH_DEBUG"
 };
@@ -65,7 +64,6 @@ char **glob_vars[] = {
 	&TOSH_VERBOSE,
 	&TOSH_PROMPT,
 	&TOSH_HIST_PATH,
-	&TOSH_HIST_LEN,
 	&TOSH_CONFIG_PATH,
 	&TOSH_DEBUG
 };
@@ -351,14 +349,14 @@ int tosh_execute(char **args) {
 }
 
 // Forward declarations for tosh_prompt()
-void tosh_show_path(char *, int);
+void tosh_show_path(char *, int, int);
 
 // Increment for buffers related to showing the prompt.
 #define PROMPT_BUF_INC 1024
 
 /* show the prompt according to the global variable TOSH_PROMPT */
 void tosh_prompt(void) {
-	int i, c;
+	int i, c, levels = 0;
 	int bufsize = PROMPT_BUF_INC;
 	char *buf = malloc(bufsize * sizeof(char));
 	if (buf == NULL) {
@@ -383,11 +381,15 @@ void tosh_prompt(void) {
 							exit(EXIT_FAILURE);
 						}
 					}
+					if (isdigit(TOSH_PROMPT[i+1])) {
+						levels = atoi(&TOSH_PROMPT[i+1]);
+						i++;
+					}
 					if (TOSH_PROMPT[i+1] == 'r') {
-						tosh_show_path(buf, 1);
+						tosh_show_path(buf, levels, 1);
 						i++;
 					} else {
-						tosh_show_path(buf, 0);
+						tosh_show_path(buf, levels, 0);
 					}
 					break;
 
@@ -486,18 +488,30 @@ void tosh_parse_args(int argc, char **argv) {
 	}
 }
 
-/* Print the given (absolute) path to stdout, possibly colouring it. */
-void tosh_show_path(char *path, int rainbow) {
-	//DEBUG_LOG("\npath is %s", path);
-	char *component = strtok(path, "/");
-	int i = 0;
+/* Print the given path (going back n levels) to stdout, possibly colouring it.
+ * Shows the absolute path if n is zero. */
+void tosh_show_path(char *path, int n, int rainbow) {
+	char *comp = strtok(path, "/");
+	char *components[strlen(path)]; // (this is obviously usually too long, but whatever)
+	int i, j = 0;
 	if (path[0] == '/')
 		printf("/");
-	while (component != NULL) {
-		printf("%s%s", (rainbow) ? tosh_colours[i++] : "", component);
+	// Split path into components
+	for (i = 0; comp != NULL; i++) {
+		components[i] = comp;
+		comp = strtok(NULL, "/");
+	}
+	components[i] = NULL;
+
+	if (n == 0) {
+		n = i;
+	}
+
+	// Show last n components
+	for (i = i - n; components[i] != NULL; i++) {
+		printf("%s%s", (rainbow) ? tosh_colours[j++] : "", components[i]);
 		printf("%s/", (rainbow) ? RESET : "");
-		i = (i + 1) % tosh_num_colours();
-		component = strtok(NULL, "/");
+		j = (j + 1) % tosh_num_colours();
 	}
 }
 
@@ -531,6 +545,7 @@ void tosh_bind_signals(void) {
 
 void tosh_record_line(char *line) {
 	int linelen = strlen(line);
+
 	if (linelen == 0) {
 		return;
 	}
@@ -549,7 +564,7 @@ void tosh_open_hist(void) {
 	strcpy(path, TOSH_HIST_PATH);
 	expanded_path = tosh_expand_string(path);
 
-	TOSH_HIST_FILE = fopen(expanded_path, "a+");
+	TOSH_HIST_FILE = fopen(expanded_path, "r+");
 	free(expanded_path);
 
 	if (TOSH_HIST_FILE == NULL) {
@@ -600,7 +615,7 @@ int tosh_exec(char **args) {
 int tosh_help(char **args) {
 	int i;
 	printf(BLD "\n---=== TOSH — a very simple shell. ===---\n" BLDRS);
-	printf("Type program names and arguments, and hit enter.\n");
+	printf("\nType program names and arguments, and hit enter.\n");
 	printf("The following are built in:\n");
 
 	// List the builtins, according to the strings stored.

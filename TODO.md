@@ -11,7 +11,7 @@
 - [x] fix: infinite loop on EOF
 - [x] fix: memory leak that happens when expanding arguments
 - [ ] add: up arrow gives history
-- [ ] add: variable number of levels in cwd path in prompt
+- [x] add: variable number of levels in cwd path in prompt
 - [x] add: sync global shell options/variables with environment variables
 - [x] extract path expansion logic from argument parsing function; allow it to be used in parsing of other paths
 - [ ] add: pipes!
@@ -19,4 +19,3 @@
 - [ ] add: tab completion
 - [ ] add: filename completion in current working directory
 - [x] add: rainbow path (add an extra flag for this in the prompt string)
-- [ ] add: maximum length of history file; keep a buffer in memory and write it out when exiting
