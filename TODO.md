@@ -6,7 +6,7 @@
 - [x] *silly, but..* make it look more fancy (somehow).
 - [x] add: prompt that includes working directory (look up some number of levels)
 - [x] add: expansion of `~` into `HOME` environment variable
-- [ ] add: filename globbing (pattern matching with `*` and `?`)
+- [x] add: filename globbing (pattern matching with `*` and `?`)
 - [x] add: invocation of `cd` without arguments
 - [x] fix: infinite loop on EOF
 - [x] fix: memory leak that happens when expanding arguments
@@ -19,3 +19,6 @@
 - [ ] add: tab completion
 - [ ] add: filename completion in current working directory
 - [x] add: rainbow path (add an extra flag for this in the prompt string)
+- [ ] add: parameter/environment variable substitution
+- [x] fix: silly segfault when getting close to root directory
+- [x] fix: memory leak relating to globfree() and args pointers

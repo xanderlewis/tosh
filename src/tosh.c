@@ -29,8 +29,12 @@
 			  	printf(BLD "log: " A BLDRS "\n", __VA_ARGS__);\
 			  }	
 
-// Global variables
+// Global history file stream
 FILE *TOSH_HIST_FILE;
+
+// Pointer to the global struct used for receiving globbing information
+glob_t *TOSH_GLOB_STRUCT_PTR;
+
 char *tosh_colours[] = {
 	RED,
 	GRN,
@@ -140,6 +144,7 @@ void tosh_prompt(void);
 char **tosh_expand_args(char **);
 void tosh_sync_env_vars(void);
 void tosh_record_line(char *);
+void tosh_glob_free(void);
 
 /* The main loop: get command line, interpret and act on it, repeat. */
 void tosh_loop(void) {
@@ -453,14 +458,35 @@ char *tosh_expand_string(char *str) {
 	return tosh_expand_string(str);
 }
 
+
+// Forward declarations for tosh_expand_args.
+char **tosh_glob_string(char *);
+void tosh_glob_free(void);
+
 /* Perform expansion on each of the arguments in the argument vector. */
 char **tosh_expand_args(char **args) {
-	int i;
+	int i, j;
+	char **globbed, **newargs, *matchedstr;
 	// Iterate through args, replacing them with their expansions.
 	for (i = 0; args[i] != NULL; i++) {
-		DEBUG_LOG("expanding arg: %s.", args[i]);
-		args[i] = tosh_expand_string(args[i]);
+		DEBUG_LOG("expanding arg: %s...", args[i]);
+		// Expand stuff like tilde.
+		newargs[i] = tosh_expand_string(args[i]);
+		// Perform globbing using metacharacters.
+		if ((globbed = tosh_glob_string(args[i])) == NULL) {
+			// If nothing matched, leave it as it was. (this behaviour is perhaps debatable?)
+			newargs[i] = args[i];
+		} else {
+			// If matched, add in matches as new args.
+			for (j = 0; (matchedstr = globbed[j]) != NULL; j++, i++) {
+				// Copy globbed filename (this will be deallocated in tosh_loop()).
+				newargs[i] = malloc((strlen(matchedstr) + 1) * sizeof(char));
+				strcpy(newargs[i], matchedstr);
+			}
+		}
 	}
+
+	tosh_glob_free();
 
 	return args;
 }
@@ -478,6 +504,9 @@ void tosh_parse_args(int argc, char **argv) {
 				switch (argv[i][j]) {
 					case 'v':
 						TOSH_VERBOSE = "ON";
+						break;
+					case 'd':
+						TOSH_DEBUG = "ON";
 						break;
 					default:
 						fprintf(stderr, "tosh: I don't know the option '%c'.\n", argv[i][j]);
@@ -507,12 +536,37 @@ void tosh_show_path(char *path, int n, int rainbow) {
 		n = i;
 	}
 
-	// Show last n components
-	for (i = i - n; components[i] != NULL; i++) {
+	// (at this point, i is the index of the terminating null pointer)
+	// Show last n components.
+	for (i = (i < n) ? 0 : i - n; components[i] != NULL; i++) {
 		printf("%s%s", (rainbow) ? tosh_colours[j++] : "", components[i]);
 		printf("%s/", (rainbow) ? RESET : "");
 		j = (j + 1) % tosh_num_colours();
 	}
+}
+
+/* Return a list of matched paths for a given string pattern. */
+char **tosh_glob_string(char *arg) {
+	char **paths, *buf, c;
+
+	// Create a glob_t structure to hold returned information from system.
+	static glob_t gstruct;
+	DEBUG_LOG("setting pointer to global glob struct...", NULL)
+	TOSH_GLOB_STRUCT_PTR = &gstruct;
+
+	// Glob pattern; return null pointer if nothing matched.
+	if (glob(arg, 0, NULL, &gstruct) == GLOB_NOMATCH) {
+		return NULL;
+	}
+
+	// Return vector of matches.
+	return gstruct.gl_pathv;
+}
+
+void tosh_glob_free(void) {
+	// Free the global glob struct.
+	DEBUG_LOG("freeing global glob struct @0x%p...", TOSH_GLOB_STRUCT_PTR)
+	globfree(TOSH_GLOB_STRUCT_PTR);
 }
 
 /* Get and set environment variables to align with global (internal) shell variables.
