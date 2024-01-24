@@ -1,3 +1,0 @@
-#!./tosh
-# Compile tosh using tosh.
-clang src/*.c -o tosh

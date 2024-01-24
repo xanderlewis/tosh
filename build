@@ -1,0 +1,3 @@
+#!./tosh -v
+# Build tosh using tosh.
+clang src/*.c -o tosh

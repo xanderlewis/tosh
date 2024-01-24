@@ -25,3 +25,4 @@
 - [x] add: take a file as an argument (not just into stdin)
 - [x] fix: bug where things after `*` get dropped
 - [x] add: ignore `#` comments
+- [x] fix: 'non-allocated pointer being freed' error when running `cd`

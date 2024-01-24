@@ -27,7 +27,7 @@
 #define UPARRW "^[[A"
 
 #define DEBUG_LOG(A, ...) if (strcmp(TOSH_DEBUG, "ON") == 0) {\
-			  	printf(BLD "log: " A BLDRS "\n", __VA_ARGS__);\
+			  	fprintf(stderr, BLD "log: " A BLDRS "\n", __VA_ARGS__);\
 			  }	
 
 // Global history file stream
@@ -56,6 +56,9 @@ char *TOSH_HIST_PATH = "~/.tosh_history";
 char *TOSH_HIST_LEN = "10000";
 char *TOSH_CONFIG_PATH = "~/.toshrc";
 char *TOSH_DEBUG = "OFF";
+char *TOSH_FORCE_INTERACTIVE = "OFF";
+char *ENV_PATH;
+char *ENV_MANPATH;
 
 // List of global shell options/variables (that can be get and set via environment variables)
 char *glob_vars_str[] = {
@@ -63,14 +66,20 @@ char *glob_vars_str[] = {
 	"TOSH_PROMPT",
 	"TOSH_HIST_PATH",
 	"TOSH_CONFIG_PATH",
-	"TOSH_DEBUG"
+	"TOSH_DEBUG",
+	"TOSH_FORCE_INTERACTIVE",
+	"PATH",
+	"MANPATH"
 };
 char **glob_vars[] = {
 	&TOSH_VERBOSE,
 	&TOSH_PROMPT,
 	&TOSH_HIST_PATH,
 	&TOSH_CONFIG_PATH,
-	&TOSH_DEBUG
+	&TOSH_DEBUG,
+	&TOSH_FORCE_INTERACTIVE,
+	&ENV_PATH,
+	&ENV_MANPATH
 };
 
 // Number of global shell options
@@ -81,17 +90,20 @@ int tosh_num_glob(void) {
 // List of builtin command names.
 char *builtin_str[] = {
 	"cd",
+	"showenv",
 	"exec",
 	"help",
 	"quit" };
 
 // Forward declarations of builtins, and pointers to them.
 int tosh_cd(char **);
+int tosh_showenv(char **);
 int tosh_exec(char **);
 int tosh_help(char **);
 int tosh_quit(char **);
 int (*builtin_func[]) (char **) = {
 	&tosh_cd,
+	&tosh_showenv,
 	&tosh_exec,
 	&tosh_help,
 	&tosh_quit
@@ -103,13 +115,17 @@ int tosh_num_builtins(void) {
 }
 
 // Forward declarations for main()
-void tosh_loop(void);
+void tosh_loop(int);
 void tosh_parse_args(int, char **);
 void tosh_bind_signals(void);
 void tosh_open_hist(void);
 void tosh_close_hist(void);
 void tosh_sync_env_vars(void);
 void tosh_load_config(void);
+
+
+// [:::TESTING:::]
+char *tosh_launch_inline(char *);
 
 int main(int argc, char **argv) {
 	// Parse arguments to tosh
@@ -126,9 +142,16 @@ int main(int argc, char **argv) {
 
 	// Open history file
 	tosh_open_hist();
+
+
+	// [:::TESTING:::]
+	/*char *line = "which echo";
+	char *result = tosh_launch_inline(line);
+	printf("result was: %s\n", result);
+	free(result);*/
 	
 	// Run command loop.
-	tosh_loop();
+	tosh_loop(1);
 
 	// Close history file
 	tosh_close_hist();
@@ -148,7 +171,7 @@ void tosh_record_line(char *);
 void tosh_glob_free(void);
 
 /* The main loop: get command line, interpret and act on it, repeat. */
-void tosh_loop(void) {
+void tosh_loop(int loop) {
 	char *line;
 	char **args;
 	int status, i;
@@ -158,7 +181,7 @@ void tosh_loop(void) {
 		tosh_sync_env_vars();
 		
 		// Show the prompt (if we're talking to a tty).
-		if (isatty(fileno(stdin)))
+		if (isatty(fileno(stdin)) || strcmp(TOSH_FORCE_INTERACTIVE, "ON") == 0)
 			tosh_prompt();
 
 		// Read in a line from stdin.
@@ -183,7 +206,8 @@ void tosh_loop(void) {
 		}
 		free(args);
 
-	} while (status); // Once tosh_execute returns zero, the shell terminates.
+	} while (status && loop); // Once tosh_execute returns zero, the shell terminates.
+				  // We also terminate if loop is false.
 }
 
 // Buffer increment for read_line function.
@@ -209,7 +233,7 @@ char *tosh_read_line(void) {
 	ungetc(c, stdin);
 	while (1) {
 		// Read in a character; if we reach EOF or a newline, return the string.
-		if ((c = getchar_unbuf()) == '\n' || c == EOF) {
+		if ((c = getchar_unbuf()) == '\n' || c == EOF || c == '\0') {
 			buf[i++] = '\0';
 			DEBUG_LOG("finished reading line with %02x.", c)
 			return buf;
@@ -305,6 +329,8 @@ int tosh_launch(char **args) {
 	if (id == 0) {
 		// In the child process... exec, passing in argument vector.
 		// (also, use the PATH environment variable to find specified program.)
+		// This child process inherits stdin and stdout file descriptors, and so
+		// can still talk to whoever/whatever the original shell was connected to.
 		if (execvp(args[0], args) == -1) {
 			perror("tosh");
 		}
@@ -323,7 +349,7 @@ int tosh_launch(char **args) {
 		} while (!WIFEXITED(status) && !WIFSIGNALED(status));
 
 		if (strcmp(TOSH_VERBOSE, "ON") == 0) {
-			printf("[%s terminated with exit code %d]\n", args[0], status);
+			printf("[%s terminated with exit code %d]\n", args[0], status / 256);
 		}
 	}
 
@@ -436,7 +462,7 @@ void tosh_prompt(void) {
 /* Expand the given string (could be a command argument, or else) according to tosh's expansion rules.
  * NOTE: takes a char pointer that is assumed to have been malloc'd earlier; requires freeing later.
  *       this function is recursive; possibly not particularly efficient. */
-char *tosh_expand_string(char *str) {
+char *tosh_expand_tilde(char *str) {
 	char *homedir, *tildeloc, *remstr;
 
 	if ((homedir = getenv("HOME")) == NULL) {
@@ -459,7 +485,14 @@ char *tosh_expand_string(char *str) {
 	strcpy(tildeloc + strlen(homedir), remstr);
 	free(remstr);
 	
-	return tosh_expand_string(str);
+	return tosh_expand_tilde(str);
+}
+
+/* Expand expressions that are intended to be evaluated (e.g. '$PATH') in the given string.
+ * As with tosh_expand_tilde(), takes a pointer that is assumed to have been malloc'd earlier;
+ * requires freeing later. */
+char *tosh_expand_expressions(char *str) {
+	return "";
 }
 
 
@@ -480,7 +513,7 @@ char **tosh_expand_args(char **args) {
 	for (i = 0; args[i] != NULL; i++) {
 		DEBUG_LOG("expanding arg: %s...", args[i]);
 		// Expand stuff like tilde.
-		args[i] = tosh_expand_string(args[i]);
+		args[i] = tosh_expand_tilde(args[i]);
 		DEBUG_LOG("expanded into %s.", args[i]);
 		// Perform globbing using metacharacters.
 		if ((globbed = tosh_glob_string(args[i])) == NULL) {
@@ -534,6 +567,9 @@ void tosh_parse_args(int argc, char **argv) {
 						break;
 					case 'd':
 						TOSH_DEBUG = "ON";
+						break;
+					case 'i':
+						TOSH_FORCE_INTERACTIVE = "ON";
 						break;
 					default:
 						fprintf(stderr, "tosh: I don't know the option '%c'.\n", argv[i][j]);
@@ -602,6 +638,82 @@ void tosh_glob_free(void) {
 	globfree(TOSH_GLOB_STRUCT_PTR);
 }
 
+// Buffer increment for receiving the result of a subshell.
+#define RESULT_BUF_INC 2048
+
+/* Spawn a subshell to execute a given command and return the outputted string,
+ * ready for substitution (usually).
+ * For now, we strip the final newline in the result, but don't worry about others. */
+char *tosh_launch_inline(char *line) {
+	pid_t id;
+	int backpipe_fd[2];
+	int topipe_fd[2];
+	char *buf, c;
+	int bufsize = RESULT_BUF_INC, bytes_read;
+
+
+	// Create pipes to transfer data to and from the subshell.
+	// (x[0] is the read end; x[1] the write end.)
+	if (pipe(backpipe_fd) == -1) {
+		fprintf(stderr, "tosh: I couldn't make the backpipe. :(\n");
+	}
+	if (pipe(topipe_fd) == -1) {
+		fprintf(stderr, "tosh: I couldn't make the topipe. :(\n");
+	}
+
+	// Fork shell
+	id = fork();
+	DEBUG_LOG("%d: forked.", id)
+
+	// Write command line to topipe's input.
+	write(topipe_fd[1], line, (strlen(line) + 1) * sizeof(char));
+	close(topipe_fd[1]);
+
+
+	if (id == 0) {
+		// In the child...
+		close(backpipe_fd[0]);
+
+		// Connect stdin to topipe's output; stdout to backpipe's input.
+		dup2(topipe_fd[0], fileno(stdin));
+		dup2(fileno(stdout), fileno(stderr));
+		dup2(backpipe_fd[1], fileno(stdout)); 
+
+		// Execute command line (non-looping).
+		tosh_loop(0);
+
+		// (We usually shouldn't end up here.)
+		close(topipe_fd[0]);
+		DEBUG_LOG("child: exiting...", NULL)
+		exit(EXIT_SUCCESS);
+
+	} else {
+		// In the parent...
+		close(backpipe_fd[1]);
+		close(topipe_fd[0]);
+		buf = malloc(bufsize * sizeof(char));
+
+		// Wait for child
+		DEBUG_LOG("parent: waiting for child with pid %d...", id)
+
+		// Read from pipe (the data is buffered by kernel until we do so).
+		bytes_read = read(backpipe_fd[0], buf, bufsize * sizeof(char));
+		close(backpipe_fd[0]);
+		DEBUG_LOG("parent: finished reading %d bytes from child.", bytes_read)
+
+		// Kill subshell.
+		kill(id, SIGTERM);
+		// (NOTE: we really ought to implement dynamic buffer size adjustment here!!)
+	
+		// Strip trailing newline.
+		if (buf[bytes_read - 1] == '\n')
+			buf[bytes_read - 1] = '\0';
+
+		return buf;
+	}
+
+}
+
 /* Get and set environment variables to align with global (internal) shell variables.
  * Check for their presence first; use internal defaults if they don't exist. */
 void tosh_sync_env_vars(void) {
@@ -649,7 +761,7 @@ void tosh_open_hist(void) {
 
 	path = malloc((strlen(TOSH_HIST_PATH) + 1) * sizeof(char));
 	strcpy(path, TOSH_HIST_PATH);
-	expanded_path = tosh_expand_string(path);
+	expanded_path = tosh_expand_tilde(path);
 
 	TOSH_HIST_FILE = fopen(expanded_path, "r+");
 	free(expanded_path);
@@ -676,8 +788,11 @@ int tosh_cd(char **args) {
 	if (args[1] == NULL) {
 		char *homedir = getenv("HOME");
 		if (homedir != NULL) {
-			args[1] = homedir;
+			args[1] = malloc((strlen(homedir) + 1) * sizeof(char));
+			strcpy(args[1], homedir);
 			return tosh_cd(args);
+		} else {
+			fprintf(stderr, "tosh: I couldn't find your home directory. :(\n");
 		}
 	} else {
 		// Attempt to change working directory of (this) process.
@@ -685,6 +800,17 @@ int tosh_cd(char **args) {
 			perror("tosh");
 		}
 	}
+	// Signal to continue.
+	return 1;
+}
+
+int tosh_showenv(char **args) {
+	printf("Environment variables that tosh cares about ⤵︎\n");
+	int i;
+	for (i = 0; i < tosh_num_glob(); i++) {
+		printf("%s=%s\n", glob_vars_str[i], *glob_vars[i]);
+	}
+	// Signal to continue.
 	return 1;
 }
 
@@ -703,7 +829,7 @@ int tosh_help(char **args) {
 	int i;
 	printf(BLD "\n---=== TOSH — a very simple shell. ===---\n" BLDRS);
 	printf("\nType program names and arguments, and hit enter.\n");
-	printf("The following are built in:\n");
+	printf("The following are built in ⤵︎\n");
 
 	// List the builtins, according to the strings stored.
 	for (i = 0; i < tosh_num_builtins(); i++) {
@@ -711,6 +837,7 @@ int tosh_help(char **args) {
 	}
 	printf("\n");
 
+	// Signal to continue.
 	return 1;
 }
 
@@ -718,5 +845,6 @@ int tosh_quit(char **args) {
 	if (strcmp(TOSH_VERBOSE, "ON") == 0) {
 		printf("Bye bye! :)\n");
 	}
+	// Signal to exit.
 	return 0;
 }
