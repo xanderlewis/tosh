@@ -19,7 +19,7 @@
 - [ ] add: tab completion
 - [ ] add: filename completion in current working directory
 - [x] add: rainbow path (add an extra flag for this in the prompt string)
-- [x] add: parameter substitution
+- [x] add: inline command substitution ((potentially recursive) execution in a subshell)
 - [x] fix: silly segfault when getting close to root directory
 - [x] fix: memory leak relating to globfree() and args pointers
 - [x] add: take a file as an argument (not just into stdin)
@@ -29,3 +29,4 @@
 - [ ] fix: / showing at beginning of path when it shouldn't
 - [ ] add: make `<Ctrl-C>` send a SIGINT to the child process, rather than tosh itself (we can use `<Ctrl-D` to exit tosh anyway, because this will send it an EOF, or just use the 'quit' builtin.)
 - [x] redo command parsing logic to handle mixture of spaces and brackets (and while we're at it, quotes). (this is very important for substitution).
+- [ ] add: environment variable substitution

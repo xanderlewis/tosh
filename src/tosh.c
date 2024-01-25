@@ -200,9 +200,9 @@ void tosh_loop(int loop) {
 
 		// Free memory used to store command line and arguments (on the heap).
 		free(line);
-		//for (i = 0; args[i] != NULL; i++) {
-		//	free(args[i]);
-		//}
+		for (i = 0; args[i] != NULL; i++) {
+			free(args[i]);
+		}
 		free(args);
 
 	} while (status && loop); // Once tosh_execute returns zero, the shell terminates.
