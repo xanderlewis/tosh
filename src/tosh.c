@@ -10,7 +10,7 @@
 #include <ctype.h>
 #include "tosh.h"
 
-#define MAX_PROMPT 128
+#define MAX_PROMPT        128
 #define TOSH_COMMENT_CHAR '#'
 
 #define RED    "\x1B[31m"
@@ -92,6 +92,7 @@ char *builtin_str[] = {
 	"cd",
 	"showenv",
 	"exec",
+	"readconfig",
 	"help",
 	"quit" };
 
@@ -99,12 +100,14 @@ char *builtin_str[] = {
 int tosh_cd(char **);
 int tosh_showenv(char **);
 int tosh_exec(char **);
+int tosh_readconfig(char **);
 int tosh_help(char **);
 int tosh_quit(char **);
 int (*builtin_func[]) (char **) = {
 	&tosh_cd,
 	&tosh_showenv,
 	&tosh_exec,
+	&tosh_readconfig,
 	&tosh_help,
 	&tosh_quit
 };
@@ -124,9 +127,6 @@ void tosh_sync_env_vars(void);
 void tosh_load_config(void);
 
 
-// [:::TESTING:::]
-char *tosh_launch_inline(char *);
-
 int main(int argc, char **argv) {
 	// Parse arguments to tosh
 	tosh_parse_args(argc, argv);
@@ -143,13 +143,6 @@ int main(int argc, char **argv) {
 	// Open history file
 	tosh_open_hist();
 
-
-	// [:::TESTING:::]
-	/*char *line = "which echo";
-	char *result = tosh_launch_inline(line);
-	printf("result was: %s\n", result);
-	free(result);*/
-	
 	// Run command loop.
 	tosh_loop(1);
 
@@ -163,6 +156,7 @@ int main(int argc, char **argv) {
 // Forward declarations for tosh_loop()
 char *tosh_read_line(void);
 char **tosh_split_line(char *);
+//char **tosh_split_line_new(char *);
 int tosh_execute(char **);
 void tosh_prompt(void);
 char **tosh_expand_args(char **);
@@ -193,6 +187,11 @@ void tosh_loop(int loop) {
 		// Split line into arguments.
 		args = tosh_split_line(line);
 
+		DEBUG_LOG("command line:", NULL)
+		for (int j = 0; args[j] != NULL; j++) {
+			DEBUG_LOG("%d) '%s'\n", j, args[j])
+		}
+
 		// Perform expansions on arguments.
 		args = tosh_expand_args(args);
 
@@ -201,9 +200,9 @@ void tosh_loop(int loop) {
 
 		// Free memory used to store command line and arguments (on the heap).
 		free(line);
-		for (i = 0; args[i] != NULL; i++) {
-			free(args[i]);
-		}
+		//for (i = 0; args[i] != NULL; i++) {
+		//	free(args[i]);
+		//}
 		free(args);
 
 	} while (status && loop); // Once tosh_execute returns zero, the shell terminates.
@@ -256,67 +255,107 @@ char *tosh_read_line(void) {
 	}
 }
 
-// Buffer increments for split function.
-#define SPLIT_BUF_INC 64
+// Buffer increments for splitting lines.
 #define ARG_BUF_INC 128
-// What we consider whitespace between program arguments.
-#define SPLIT_DELIM " \t\r\n\a"
+#define LINE_BUF_INC 64
 
-/* Split up the given line into a vector of (string) arguments, ignoring everything after a
- * comment character.
- * NOTE: a # not following whitespace (that is, not separated from what it precedes) will be
- *       taken literally. */
+/* Convert a given line (string) into a list of (string) arguments. */
 char **tosh_split_line(char *line) {
-	// Start with SPLIT_BUF_INC bytes.
-	int bufsize = SPLIT_BUF_INC;
-	int arg_bufsize = ARG_BUF_INC;
-	int i = 0, j;
-	char **tokens = malloc(bufsize * sizeof(char *));
-	char *token;
-	char c;
+	int bl, q, i, j, c, argbufsize, linebufsize, num_args;
+	char **tokens, **tp;
 
-	// If malloc fails...
-	if (!tokens) {
-		fprintf(stderr, "tosh: memory allocation failed. :(\n");
-		exit(EXIT_FAILURE);
-	}
+	argbufsize = ARG_BUF_INC;
+	linebufsize = LINE_BUF_INC;
+	i = j = 0;
+	q = 0;
+	bl = 0;
+	num_args = 0;
+	tokens = malloc(linebufsize * sizeof(char));
+	tp = tokens;
 
-	// Tokenise the line, and get the first token back (or NULL).
-	token = strtok(line, SPLIT_DELIM);
-	while (token != NULL && token[0] != TOSH_COMMENT_CHAR) {
-		tokens[i++] = token;
+	*tp = malloc(argbufsize * sizeof(char));
 
-		// If we've exceeded the buffer, attempt to reallocate.
-		if (i >= bufsize) {
-			bufsize += SPLIT_BUF_INC;
-			tokens = realloc(tokens, bufsize * sizeof(char *));
-			if (!tokens) {
-				fprintf(stderr, "tosh: memory allocation failed. :(\n");
-				exit(EXIT_FAILURE);
-			}
+	while (bl >= 0) {
+		c = line[i++];
+		switch (c) {
+			case '(':
+				bl++;
+				(*tp)[j++] = c;
+				break;
+			case ')':
+				bl--;
+				(*tp)[j++] = c;
+				break;
+			case '\'':
+				printf("got a quote.\n");
+				q = (q) ? 0 : 1;
+				break;
+			case '\\':
+				printf("got a backslash.\n");
+				if (line[i] == '\'') {
+					printf("we have an escaped quote.\n");
+					(*tp)[j++] = '\'';
+					i++;
+				} else if (line[i] == '\\') {
+					printf("we have an escaped backslash.\n");
+					(*tp)[j++] = '\\';
+					i++;
+				} 
+				break;
+			case ' ':
+				if (bl == 0 && q == 0) {
+					// Allocate more memory for line if needed.
+					while (num_args * sizeof(char *) >= linebufsize) {
+						linebufsize += LINE_BUF_INC;
+						DEBUG_LOG("realloc'ing whilst parsing line (%d more bytes)...", LINE_BUF_INC)
+						tokens = realloc(tokens, linebufsize * sizeof(char));
+						if (tokens == NULL) {
+							fprintf(stderr, "tosh: memory allocation failed. :(\n");
+							exit(EXIT_FAILURE);
+						}
+					}
+					// Point to next token.
+					argbufsize = ARG_BUF_INC;
+					tp++;
+					*tp = malloc(argbufsize * sizeof(char));
+					j = 0;
+					num_args++;
+				} else {
+					(*tp)[j++] = c;	
+				}
+				break;
+			case EOF:
+			case '\n':
+			case '\0':
+			case '#':
+				if (bl != 0) {
+					fprintf(stderr, "tosh: mismatched brackets. :(\n");
+					return NULL;
+				} else if (q != 0) {
+					fprintf(stderr, "tosh: mismatched quotes. :(\n");
+					return NULL;
+				}
+				tp++;
+				tp = NULL;
+				return tokens;
+			default:
+				// Allocate more memory for argument if needed.
+				while (j * sizeof(char) >= argbufsize) {
+					argbufsize += ARG_BUF_INC;
+					DEBUG_LOG("realloc'ing whilst parsing argument (%d more bytes)...", ARG_BUF_INC)
+					tp = realloc(tp, argbufsize * sizeof(char));
+					if (tp == NULL) {
+						fprintf(stderr, "tosh: memory allocation failed. :(\n");
+						exit(EXIT_FAILURE);
+					}
+				}
+				(*tp)[j++] = c;
+				break;
 		}
-		// Get next token from strtok.
-		token = strtok(NULL, SPLIT_DELIM);
-	}
-	tokens[i] = NULL;
-	
-	// Replace each element of `tokens` with a dynamically-allocated string (a copy of the original string at that point).
-	for (i = 0; tokens[i] != NULL; i++) {
-		char *p = malloc(arg_bufsize * sizeof(char));
-		for (j = 0; (c = tokens[i][j]) != '\0'; j++) {
-			if (j >= arg_bufsize) {
-				arg_bufsize += ARG_BUF_INC;
-				DEBUG_LOG("realloc'ing whilst reading in argument (%d more bytes)...", ARG_BUF_INC)
-				p = realloc(p, arg_bufsize * sizeof(char));
-			}
-			p[j] = tokens[i][j];
-			DEBUG_LOG("copied char %c.", c)
-		}
-		tokens[i] = p;
 	}
 
-	DEBUG_LOG("returning tokens after splitting...", NULL)
-	return tokens;
+	fprintf(stderr, "tosh: mismatched brackets. :(\n");
+	return NULL;
 }
 
 /* Fork and exec a requested external program */
@@ -472,16 +511,17 @@ char *tosh_expand_tilde(char *str) {
 
 	str = realloc(str, (strlen(str) - 1 + strlen(homedir) + 1) * sizeof(char));
 
+	// If there isn't a tilde...
 	if ((tildeloc = strchr(str, '~')) == NULL) {
 		return str;
 	}
 
-	// Copy remainder of string
+	// Copy remainder of string.
 	remstr = malloc((strlen(tildeloc) + 1) * sizeof(char));
 	strcpy(remstr, tildeloc + 1);
-	// Copy value of HOME from tilde onwards
+	// Copy value of HOME from tilde onwards.
 	strcpy(tildeloc, homedir);
-	// Copy rest of string after HOME
+	// Copy rest of string after HOME.
 	strcpy(tildeloc + strlen(homedir), remstr);
 	free(remstr);
 	
@@ -499,6 +539,7 @@ char *tosh_expand_expressions(char *str) {
 // Forward declarations for tosh_expand_args.
 char **tosh_glob_string(char *);
 void tosh_glob_free(void);
+char *tosh_expand_expression(char *);
 
 #define TOSH_EXPAND_BUF_INC 64
 
@@ -506,15 +547,25 @@ void tosh_glob_free(void);
 char **tosh_expand_args(char **args) {
 	int i, j, k = 0;
 	int bufsize = TOSH_EXPAND_BUF_INC;
-	char **globbed, **newargs, *matchedstr;
+	char **globbed, **newargs, *matchedstr, *newarg;
 
 	newargs = malloc(bufsize * sizeof(char *));
 	// Iterate through args, replacing them with their expansions.
 	for (i = 0; args[i] != NULL; i++) {
 		DEBUG_LOG("expanding arg: %s...", args[i]);
-		// Expand stuff like tilde.
+
+		// Expand tilde.
 		args[i] = tosh_expand_tilde(args[i]);
-		DEBUG_LOG("expanded into %s.", args[i]);
+		DEBUG_LOG("tilde expanded into %s.", args[i]);
+
+		// Expand any $(EXPRESSION)s (for now, only the first occurrence we find).
+		if ((newarg = tosh_expand_expression(args[i])) != NULL) {
+			args[i] = newarg;
+		} else {
+			DEBUG_LOG("no expression to expand.", NULL)
+		}
+		DEBUG_LOG("further expanded into %s.", args[i]);
+
 		// Perform globbing using metacharacters.
 		if ((globbed = tosh_glob_string(args[i])) == NULL) {
 			// If nothing matched, leave it as it was. (this behaviour is perhaps debatable?)
@@ -638,13 +689,115 @@ void tosh_glob_free(void) {
 	globfree(TOSH_GLOB_STRUCT_PTR);
 }
 
-// Buffer increment for receiving the result of a subshell.
+// Forward declarations for tosh_expand_expression().
+int tosh_locate_expression(char *, int *, int *, int *, int *);
+char *tosh_eval_inline(char *);
+char *tosh_str_substitute(char *, int, int, char *);
+
+/* Expand the first expression to be substituted found in the string str.
+ * Returns a null pointer if no expression to be evaluated was found. 
+ * Returned string is dynamically allocated; requires freeing later. */
+char *tosh_expand_expression(char *str) {
+	int si, ei, rsi, rei;
+	char *expr, *result, *newstr;
+
+	DEBUG_LOG("expanding expression in line '%s'...", str);
+
+	// Locate expression.
+	if (!tosh_locate_expression(str, &si, &ei, &rsi, &rei)) {
+		// Not found.
+		DEBUG_LOG("didn't find an expression to be evaluated.", NULL)
+		return NULL;
+	} 
+
+	// Evaluate expression in a subshell.
+	expr = malloc((strlen(&str[si]) + 1) * sizeof(char));
+	memcpy(expr, &str[si], strlen(str) - si);
+	expr[ei - si] = '\0';
+	DEBUG_LOG("evaluating: '%s'...", expr);
+	result = tosh_eval_inline(expr);
+	free(expr);
+	DEBUG_LOG("evaluated to: '%s'", result);
+	
+	// Substitute back into str.
+	newstr = tosh_str_substitute(str, rsi, rei, result);
+	free(str);
+	free(result);
+	DEBUG_LOG("substitution yields: '%s'", newstr);
+
+	return newstr;
+}
+
+/* Find the first expression to be evaluated and substituted in the string str.
+ * Returns the start and end indices of the expression as si and ei, and the
+ * start and end indices of the whole substring to be replaced as rsi and rei.
+ * Actual return value is 1 if an expression was found, and 0 if not. */
+int tosh_locate_expression(char *str, int *si, int *ei, int *rsi, int *rei) {
+	int i;
+	char *str2, *substr;
+
+	// Find a dollar sign...
+	for (i = 0; str[i] != '$' && str[i] != '\0'; i++)
+		;
+	// Didn't find one.
+	if (str[i] == '\0')
+		return 0;
+	*si = i + 1;
+	*rsi = i;
+
+	if (str[++i] == '(') {
+		// If next char is an opening bracket, look for a closing one.
+		(*si)++;
+		for (; str[i] != ')' && str[i] != '\0'; i++)
+			;
+		// Didn't find one.
+		if (str[i] == '\0')
+			return 0;
+		*ei = i;
+		*rei = i + 1;
+
+	
+	} else {
+		// Otherwise, take rest of string up to whitespace or end (null byte).
+		for (; str[i] != ' ' && str[i] != '\t' && str[i] != '\n' && str[i] != '\0'; i++)
+			;
+		*ei = i;
+		*rei = i;
+	}
+
+	return 1;
+}
+
+/* Substitute substr for the substring of str delimited by the indices si and ei.
+ * (start index and end index respectively: si included; ei not.)
+ * Returns a dynamically allocated string; requires freeing later. */
+char *tosh_str_substitute(char *str, int si, int ei, char *substr) {
+	char *newstr = malloc((strlen(str) - (ei - si + 1) + strlen(substr) + 1) * sizeof(char));
+
+	DEBUG_LOG("substituting %s in the string %s...\n", substr, str);
+	DEBUG_LOG("start index: %d, end index: %d.\n", si, ei);
+
+	// Copy the original string (all of it).
+	strcpy(newstr, str);
+	DEBUG_LOG("newstr: %s\n", newstr);
+	// Insert substring
+	strcpy(&newstr[si], substr);
+	DEBUG_LOG("newstr: %s\n", newstr);
+	// Insert rest of string
+	strcpy(&newstr[si + strlen(substr)], &str[ei]);
+	DEBUG_LOG("newstr: %s\n", newstr);
+
+	return newstr;
+}
+
+// Buffer increment for receiving the data returned by a subshell.
 #define RESULT_BUF_INC 2048
 
 /* Spawn a subshell to execute a given command and return the outputted string,
  * ready for substitution (usually).
+ * Returns a dynamically allocated string; requires freeing later.
  * For now, we strip the final newline in the result, but don't worry about others. */
-char *tosh_launch_inline(char *line) {
+char *tosh_eval_inline(char *line) {
 	pid_t id;
 	int backpipe_fd[2];
 	int topipe_fd[2];
@@ -680,6 +833,8 @@ char *tosh_launch_inline(char *line) {
 		dup2(backpipe_fd[1], fileno(stdout)); 
 
 		// Execute command line (non-looping).
+		TOSH_DEBUG = "OFF";
+		TOSH_VERBOSE = "OFF";
 		tosh_loop(0);
 
 		// (We usually shouldn't end up here.)
@@ -695,8 +850,10 @@ char *tosh_launch_inline(char *line) {
 
 		// Wait for child
 		DEBUG_LOG("parent: waiting for child with pid %d...", id)
+		waitpid(id, NULL, 0);
 
-		// Read from pipe (the data is buffered by kernel until we do so).
+		// Read from pipe (the data is buffered to a certain extent by kernel until we do so).
+		// But we wait above, because for longer output the buffer isn't always large enough.
 		bytes_read = read(backpipe_fd[0], buf, bufsize * sizeof(char));
 		close(backpipe_fd[0]);
 		DEBUG_LOG("parent: finished reading %d bytes from child.", bytes_read)
@@ -707,6 +864,8 @@ char *tosh_launch_inline(char *line) {
 	
 		// Strip trailing newline.
 		if (buf[bytes_read - 1] == '\n')
+			buf[bytes_read - 1] = '\0';
+		else
 			buf[bytes_read - 1] = '\0';
 
 		return buf;
@@ -779,10 +938,11 @@ void tosh_close_hist(void) {
 }
 
 void tosh_load_config(void) {
+	// This has yet to be implemented. ;-)
 	;
 }
 
-/* -- BUILTINS BELOW -- */
+/* ---- BUILTINS BELOW ---- */
 
 int tosh_cd(char **args) {
 	if (args[1] == NULL) {
@@ -823,6 +983,13 @@ int tosh_exec(char **args) {
 	}
 	// (We should never end up here!)
 	return 0;
+}
+
+int tosh_readconfig(char **args) {
+	tosh_load_config();
+	
+	// Signal to continue.
+	return 1;
 }
 
 int tosh_help(char **args) {
