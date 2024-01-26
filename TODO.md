@@ -26,7 +26,7 @@
 - [x] fix: bug where things after `*` get dropped
 - [x] add: ignore `#` comments
 - [x] fix: 'non-allocated pointer being freed' error when running `cd`
-- [ ] fix: / showing at beginning of path when it shouldn't
-- [ ] add: make `<Ctrl-C>` send a SIGINT to the child process, rather than tosh itself (we can use `<Ctrl-D` to exit tosh anyway, because this will send it an EOF, or just use the 'quit' builtin.)
+- [x] fix: / showing at beginning of path when it shouldn't
 - [x] redo command parsing logic to handle mixture of spaces and brackets (and while we're at it, quotes). (this is very important for substitution).
 - [ ] add: environment variable substitution
+- [x] fix: subshells execute in non-verbose mode, regardless of parent

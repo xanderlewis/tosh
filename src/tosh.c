@@ -11,6 +11,7 @@
 #include "tosh.h"
 
 #define MAX_PROMPT        128
+#define MAX_CHILD         128
 #define TOSH_COMMENT_CHAR '#'
 
 #define RED    "\x1B[31m"
@@ -35,6 +36,10 @@ FILE *TOSH_HIST_FILE;
 
 // Pointer to the global struct used for receiving globbing information
 glob_t *TOSH_GLOB_STRUCT_PTR;
+
+// Global stack of PIDs of child processes
+pid_t TOSH_CHILDREN[MAX_CHILD];
+int TOSH_CHILDREN_SP = 0;
 
 char *tosh_colours[] = {
 	RED,
@@ -171,9 +176,6 @@ void tosh_loop(int loop) {
 	int status, i;
 
 	do {
-		// Sync with environment variables.
-		tosh_sync_env_vars();
-		
 		// Show the prompt (if we're talking to a tty).
 		if (isatty(fileno(stdin)) || strcmp(TOSH_FORCE_INTERACTIVE, "ON") == 0)
 			tosh_prompt();
@@ -197,6 +199,9 @@ void tosh_loop(int loop) {
 
 		// Run command (builtin or not).
 		status = tosh_execute(args);
+
+		// Sync with environment variables.
+		tosh_sync_env_vars();
 
 		// Free memory used to store command line and arguments (on the heap).
 		free(line);
@@ -637,14 +642,12 @@ void tosh_parse_args(int argc, char **argv) {
 	}
 }
 
-/* Print the given path (going back n levels) to stdout, possibly colouring it.
- * Shows the absolute path if n is zero. */
+/* Print the given path (going back n levels) to stdout, possibly colouring it. */
 void tosh_show_path(char *path, int n, int rainbow) {
 	char *comp = strtok(path, "/");
 	char *components[strlen(path)]; // (this is obviously usually too long, but whatever)
 	int i, j = 0;
-	if (path[0] == '/')
-		printf("/");
+
 	// Split path into components
 	for (i = 0; comp != NULL; i++) {
 		components[i] = comp;
@@ -652,9 +655,9 @@ void tosh_show_path(char *path, int n, int rainbow) {
 	}
 	components[i] = NULL;
 
-	if (n == 0) {
-		n = i;
-	}
+	// Show initial slash if path goes back to root.
+	if (i <= n)
+		printf("/");
 
 	// (at this point, i is the index of the terminating null pointer)
 	// Show last n components.
@@ -824,7 +827,7 @@ char *tosh_eval_inline(char *line) {
 
 
 	if (id == 0) {
-		// In the child...
+		// [In the child...]
 		close(backpipe_fd[0]);
 
 		// Connect stdin to topipe's output; stdout to backpipe's input.
@@ -843,24 +846,35 @@ char *tosh_eval_inline(char *line) {
 		exit(EXIT_SUCCESS);
 
 	} else {
-		// In the parent...
+		// [In the parent...]
 		close(backpipe_fd[1]);
 		close(topipe_fd[0]);
-		buf = malloc(bufsize * sizeof(char));
 
-		// Wait for child
+		// Store PID of child.
+		TOSH_CHILDREN[TOSH_CHILDREN_SP++] = id;
+
+		buf = malloc(bufsize * sizeof(char));
+		if (buf == NULL) {
+			fprintf(stderr, "tosh: memory allocation failed. :(\n");
+		}
+
+		// Wait for child.
 		DEBUG_LOG("parent: waiting for child with pid %d...", id)
 		waitpid(id, NULL, 0);
 
 		// Read from pipe (the data is buffered to a certain extent by kernel until we do so).
-		// But we wait above, because for longer output the buffer isn't always large enough.
+		// ...but we wait above, because for longer output the buffer isn't always large enough.
 		bytes_read = read(backpipe_fd[0], buf, bufsize * sizeof(char));
 		close(backpipe_fd[0]);
 		DEBUG_LOG("parent: finished reading %d bytes from child.", bytes_read)
 
 		// Kill subshell.
 		kill(id, SIGTERM);
-		// (NOTE: we really ought to implement dynamic buffer size adjustment here!!)
+
+		// Remove PID of child.
+		TOSH_CHILDREN_SP--;
+
+		/* [NOTE: we really ought to implement dynamic buffer size adjustment here!!] */
 	
 		// Strip trailing newline.
 		if (buf[bytes_read - 1] == '\n')
@@ -894,7 +908,6 @@ void tosh_sigint(int sig) {
 	if (strcmp(TOSH_VERBOSE, "ON") == 0) {
 		printf("\nRecieved a SIGINT!\n");
 	}
-	exit(EXIT_SUCCESS);
 }
 
 void tosh_bind_signals(void) {
