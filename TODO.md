@@ -1,6 +1,6 @@
 # TODO
 - [x] add: `-v` verbose option for shell (off by default)
-- [ ] add: quoting in arguments
+- [x] add: quoting in arguments
 - [ ] add: reading from config file at startup
 - [ ] add: reading from config on builtin command
 - [x] *silly, but..* make it look more fancy (somehow).
@@ -26,7 +26,9 @@
 - [x] fix: bug where things after `*` get dropped
 - [x] add: ignore `#` comments
 - [x] fix: 'non-allocated pointer being freed' error when running `cd`
-- [x] fix: / showing at beginning of path when it shouldn't
+- [x] fix: `/` showing at beginning of path when it shouldn't
 - [x] redo command parsing logic to handle mixture of spaces and brackets (and while we're at it, quotes). (this is very important for substitution).
 - [ ] add: environment variable substitution
 - [x] fix: subshells execute in non-verbose mode, regardless of parent
+- [x] fix: some arguments being dropped (probably a buffer-related problem)
+- [ ] add: `!!` expands to last entered command line

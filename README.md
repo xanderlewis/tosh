@@ -17,3 +17,22 @@ Pass data in via standard input like `./tosh < file` or pass a file (several lin
 Can be combined: `-dv`, for example. These options are also adjustable via environment variables; run `env` from within tosh to have a look.
 
 Type `help` to see some more info.
+
+## Features
+- traverse the filesystem with `cd`
+- run commands and pass them arguments with the usual syntax (including quotes)
+- custom prompt string (with formatting, and optional rainbow colours!)
+- filename globbing (`*` and `?` metacharacters)
+- inline recursive command substitution (execution in a subshell)
+- control behaviour with tosh-specific environment variables
+- history file in a chosen location
+- read commands from a file (i.e. execute shell scripts)
+
+## Coming soon
+- pipes
+- I/O redirection (to and from files)
+- config files
+- environment variable substitution and editing
+
+I wanted to include other nice features like *tab completion, up arrow to browse history, live completion suggestion of paths/filenames, etc.*, but since this requires unbuffered access to the input stream it turns out not only to be highly platform-dependent but also particularly difficult on macOS. 
+...but it must be possible with some more effort.

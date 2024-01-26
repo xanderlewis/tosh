@@ -189,26 +189,22 @@ void tosh_loop(int loop) {
 		// Split line into arguments.
 		args = tosh_split_line(line);
 
-		DEBUG_LOG("command line:", NULL)
-		for (int j = 0; args[j] != NULL; j++) {
-			DEBUG_LOG("%d) '%s'\n", j, args[j])
+		if (args != NULL) {
+			// Perform expansions on arguments.
+			args = tosh_expand_args(args);
+
+			// Run command (builtin or not).
+			status = tosh_execute(args);
+			// Sync with environment variables.
+			tosh_sync_env_vars();
+
+			// Free memory used to store command line and arguments (on the heap).
+			free(line);
+			for (i = 0; args[i] != NULL; i++) {
+				free(args[i]);
+			}
+			free(args);
 		}
-
-		// Perform expansions on arguments.
-		args = tosh_expand_args(args);
-
-		// Run command (builtin or not).
-		status = tosh_execute(args);
-
-		// Sync with environment variables.
-		tosh_sync_env_vars();
-
-		// Free memory used to store command line and arguments (on the heap).
-		free(line);
-		for (i = 0; args[i] != NULL; i++) {
-			free(args[i]);
-		}
-		free(args);
 
 	} while (status && loop); // Once tosh_execute returns zero, the shell terminates.
 				  // We also terminate if loop is false.
@@ -219,10 +215,10 @@ void tosh_loop(int loop) {
 
 char *tosh_read_line(void) {
 	int bufsize = READ_BUF_INC;
-	int i = 0;
+	int i, c;
+	char *buf;
 	// Allocate first READ_BUF_INC bytes.
-	char *buf = malloc(sizeof(char) * bufsize);
-	int c;
+	buf = malloc(sizeof(char) * bufsize);
 
 	// If we get a null pointer back from malloc...
 	if (!buf) {
@@ -235,6 +231,9 @@ char *tosh_read_line(void) {
 		exit(EXIT_SUCCESS);
 	}
 	ungetc(c, stdin);
+
+	i = 0;
+
 	while (1) {
 		// Read in a character; if we reach EOF or a newline, return the string.
 		if ((c = getchar_unbuf()) == '\n' || c == EOF || c == '\0') {
@@ -275,10 +274,15 @@ char **tosh_split_line(char *line) {
 	q = 0;
 	bl = 0;
 	num_args = 0;
-	tokens = malloc(linebufsize * sizeof(char));
+	tokens = malloc(linebufsize * sizeof(char *));
 	tp = tokens;
 
 	*tp = malloc(argbufsize * sizeof(char));
+
+	if (!tokens || !tp) {
+		fprintf(stderr, "tosh: memory allocation failed. :(\n");
+		exit(EXIT_FAILURE);
+	}
 
 	while (bl >= 0) {
 		c = line[i++];
@@ -292,11 +296,9 @@ char **tosh_split_line(char *line) {
 				(*tp)[j++] = c;
 				break;
 			case '\'':
-				printf("got a quote.\n");
 				q = (q) ? 0 : 1;
 				break;
 			case '\\':
-				printf("got a backslash.\n");
 				if (line[i] == '\'') {
 					printf("we have an escaped quote.\n");
 					(*tp)[j++] = '\'';
@@ -313,8 +315,8 @@ char **tosh_split_line(char *line) {
 					while (num_args * sizeof(char *) >= linebufsize) {
 						linebufsize += LINE_BUF_INC;
 						DEBUG_LOG("realloc'ing whilst parsing line (%d more bytes)...", LINE_BUF_INC)
-						tokens = realloc(tokens, linebufsize * sizeof(char));
-						if (tokens == NULL) {
+						tokens = realloc(tokens, linebufsize * sizeof(char *));
+						if (!tokens) {
 							fprintf(stderr, "tosh: memory allocation failed. :(\n");
 							exit(EXIT_FAILURE);
 						}
@@ -323,6 +325,10 @@ char **tosh_split_line(char *line) {
 					argbufsize = ARG_BUF_INC;
 					tp++;
 					*tp = malloc(argbufsize * sizeof(char));
+					if (!*tp) {
+						fprintf(stderr, "tosh: memory allocation failed. :(\n");
+						exit(EXIT_FAILURE);
+					}
 					j = 0;
 					num_args++;
 				} else {
@@ -340,6 +346,10 @@ char **tosh_split_line(char *line) {
 					fprintf(stderr, "tosh: mismatched quotes. :(\n");
 					return NULL;
 				}
+				if (num_args == 0 && strlen(*tp) == 0) {
+					DEBUG_LOG("no arguments.", NULL)
+					return NULL;
+				}
 				tp++;
 				tp = NULL;
 				return tokens;
@@ -349,7 +359,7 @@ char **tosh_split_line(char *line) {
 					argbufsize += ARG_BUF_INC;
 					DEBUG_LOG("realloc'ing whilst parsing argument (%d more bytes)...", ARG_BUF_INC)
 					tp = realloc(tp, argbufsize * sizeof(char));
-					if (tp == NULL) {
+					if (!tp) {
 						fprintf(stderr, "tosh: memory allocation failed. :(\n");
 						exit(EXIT_FAILURE);
 					}
@@ -438,7 +448,7 @@ void tosh_prompt(void) {
 	int i, c, levels = 0;
 	int bufsize = PROMPT_BUF_INC;
 	char *buf = malloc(bufsize * sizeof(char));
-	if (buf == NULL) {
+	if (!buf) {
 		fprintf(stderr, "tosh: memory allocation failed. :(\n");
 		exit(EXIT_FAILURE);
 	}
@@ -455,7 +465,7 @@ void tosh_prompt(void) {
 						// Buffer overflow; reallocate.
 						bufsize += PROMPT_BUF_INC;
 						buf = realloc(buf, bufsize);
-						if (buf == NULL) {
+						if (!buf) {
 							fprintf(stderr, "tosh: memory allocation failed. :(\n");
 							exit(EXIT_FAILURE);
 						}
@@ -486,7 +496,7 @@ void tosh_prompt(void) {
 						// Buffer overflow; reallocate.
 						bufsize += PROMPT_BUF_INC;
 						buf = realloc(buf, bufsize);
-						if (buf == NULL) {
+						if (!buf) {
 							fprintf(stderr, "tosh: memory allocation failed. :(\n");
 							exit(EXIT_FAILURE);
 						}
@@ -515,6 +525,10 @@ char *tosh_expand_tilde(char *str) {
 	}
 
 	str = realloc(str, (strlen(str) - 1 + strlen(homedir) + 1) * sizeof(char));
+	if (!str) {
+		fprintf(stderr, "tosh: memory allocation failed. :(\n");
+		exit(EXIT_FAILURE);
+	}
 
 	// If there isn't a tilde...
 	if ((tildeloc = strchr(str, '~')) == NULL) {
@@ -523,6 +537,10 @@ char *tosh_expand_tilde(char *str) {
 
 	// Copy remainder of string.
 	remstr = malloc((strlen(tildeloc) + 1) * sizeof(char));
+	if (!remstr) {
+		fprintf(stderr, "tosh: memory allocation failed. :(\n");
+		exit(EXIT_FAILURE);
+	}
 	strcpy(remstr, tildeloc + 1);
 	// Copy value of HOME from tilde onwards.
 	strcpy(tildeloc, homedir);
@@ -575,13 +593,16 @@ char **tosh_expand_args(char **args) {
 		if ((globbed = tosh_glob_string(args[i])) == NULL) {
 			// If nothing matched, leave it as it was. (this behaviour is perhaps debatable?)
 			DEBUG_LOG("nothing matched.", NULL)
-			DEBUG_LOG("copying %s...", args[i])
 			newargs[k++] = args[i];
 
 			// Increase buffer size (total number of arguments) if necessary.
 			if (k >= bufsize) {
 				bufsize += TOSH_EXPAND_BUF_INC;
 				newargs = realloc(newargs, bufsize * sizeof(char));
+				if (!newargs) {
+					fprintf(stderr, "tosh: memory allocation failed. :(\n");
+					exit(EXIT_FAILURE);
+				}
 			}
 		} else {
 			// If matched, add in matches as new args.
@@ -589,12 +610,20 @@ char **tosh_expand_args(char **args) {
 				// Copy globbed filename (this will be deallocated in tosh_loop()).
 				DEBUG_LOG("found %s.", matchedstr)
 				newargs[k] = malloc((strlen(matchedstr) + 1) * sizeof(char));
+				if (!newargs[k]) {
+					fprintf(stderr, "tosh: memory allocation failed. :(\n");
+					exit(EXIT_FAILURE);
+				}
 				strcpy(newargs[k++], matchedstr);
 
 				// Increase buffer size (total number of arguments) if necessary.
 				if (k >= bufsize) {
 					bufsize += TOSH_EXPAND_BUF_INC;
 					newargs = realloc(newargs, bufsize * sizeof(char));
+					if (!newargs) {
+						fprintf(stderr, "tosh: memory allocation failed. :(\n");
+						exit(EXIT_FAILURE);
+					}
 				}
 
 			}
@@ -715,6 +744,10 @@ char *tosh_expand_expression(char *str) {
 
 	// Evaluate expression in a subshell.
 	expr = malloc((strlen(&str[si]) + 1) * sizeof(char));
+	if (!expr) {
+		fprintf(stderr, "tosh: memory allocation failed. :(\n");
+		exit(EXIT_FAILURE);
+	}
 	memcpy(expr, &str[si], strlen(str) - si);
 	expr[ei - si] = '\0';
 	DEBUG_LOG("evaluating: '%s'...", expr);
@@ -776,6 +809,10 @@ int tosh_locate_expression(char *str, int *si, int *ei, int *rsi, int *rei) {
  * Returns a dynamically allocated string; requires freeing later. */
 char *tosh_str_substitute(char *str, int si, int ei, char *substr) {
 	char *newstr = malloc((strlen(str) - (ei - si + 1) + strlen(substr) + 1) * sizeof(char));
+	if (!newstr) {
+		fprintf(stderr, "tosh: memory allocation failed. :(\n");
+		exit(EXIT_FAILURE);
+	}
 
 	DEBUG_LOG("substituting %s in the string %s...\n", substr, str);
 	DEBUG_LOG("start index: %d, end index: %d.\n", si, ei);
@@ -854,7 +891,7 @@ char *tosh_eval_inline(char *line) {
 		TOSH_CHILDREN[TOSH_CHILDREN_SP++] = id;
 
 		buf = malloc(bufsize * sizeof(char));
-		if (buf == NULL) {
+		if (!buf) {
 			fprintf(stderr, "tosh: memory allocation failed. :(\n");
 		}
 
@@ -932,6 +969,10 @@ void tosh_open_hist(void) {
 	char *path, *expanded_path;
 
 	path = malloc((strlen(TOSH_HIST_PATH) + 1) * sizeof(char));
+	if (!path) {
+		fprintf(stderr, "tosh: memory allocation failed. :(\n");
+		exit(EXIT_FAILURE);
+	}
 	strcpy(path, TOSH_HIST_PATH);
 	expanded_path = tosh_expand_tilde(path);
 
@@ -962,6 +1003,10 @@ int tosh_cd(char **args) {
 		char *homedir = getenv("HOME");
 		if (homedir != NULL) {
 			args[1] = malloc((strlen(homedir) + 1) * sizeof(char));
+			if (!args[1]) {
+				fprintf(stderr, "tosh: memory allocation failed. :(\n");
+				exit(EXIT_FAILURE);
+			}
 			strcpy(args[1], homedir);
 			return tosh_cd(args);
 		} else {
