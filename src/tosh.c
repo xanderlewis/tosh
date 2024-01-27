@@ -10,13 +10,17 @@
 #include <ctype.h>
 #include "tosh.h"
 
-#define MAX_PROMPT        128
-#define MAX_CHILD         128
+// Various global constants
+#define TOSH_MAX_PROMPT        128
+#define TOSH_MAX_CHILD         128
 #define TOSH_COMMENT_CHAR '#'
-#define TOSH_MAX_PATH     4096 // There is often a symbolic constant PATH_MAX defined in
-			       // <limits.h> on POSIX systems, but on macOS there either
-			       // isn't a limit or it isn't defined in this way.
+#define TOSH_MAX_PATH     4096
 
+// (There is often a symbolic constant PATH_MAX defined in
+// <limits.h> on POSIX systems, but on macOS there either
+// isn't a limit or it isn't defined in this way.)
+
+// Colours
 #define RED    "\x1B[31m"
 #define GRN    "\x1B[32m"
 #define YEL    "\x1B[33m"
@@ -42,10 +46,6 @@ glob_t *TOSH_GLOB_STRUCT_PTR;
 // (Chronologically) previous directory
 char TOSH_LAST_DIR[TOSH_MAX_PATH]; // [note: 256 bytes is the max length of a dirname in Unix]
 
-// Global stack of PIDs of child processes
-pid_t TOSH_CHILDREN[MAX_CHILD];
-int TOSH_CHILDREN_SP = 0;
-
 char *tosh_colours[] = {
 	RED,
 	GRN,
@@ -69,6 +69,7 @@ char *TOSH_DEBUG = "OFF";
 char *TOSH_FORCE_INTERACTIVE = "OFF";
 char *ENV_PATH;
 char *ENV_MANPATH;
+char *ENV_SHLVL;
 
 // List of global shell options/variables (that can be get and set via environment variables)
 char *glob_vars_str[] = {
@@ -79,7 +80,8 @@ char *glob_vars_str[] = {
 	"TOSH_DEBUG",
 	"TOSH_FORCE_INTERACTIVE",
 	"PATH",
-	"MANPATH"
+	"MANPATH",
+	"SHLVL"
 };
 char **glob_vars[] = {
 	&TOSH_VERBOSE,
@@ -89,7 +91,8 @@ char **glob_vars[] = {
 	&TOSH_DEBUG,
 	&TOSH_FORCE_INTERACTIVE,
 	&ENV_PATH,
-	&ENV_MANPATH
+	&ENV_MANPATH,
+	&ENV_SHLVL
 };
 
 // Number of global shell options
@@ -297,11 +300,13 @@ char **tosh_split_line(char *line) {
 		c = line[i++];
 		switch (c) {
 			case '(':
-				bl++;
+				if (!q)
+					bl++;
 				(*tp)[j++] = c;
 				break;
 			case ')':
-				bl--;
+				if (!q)
+					bl--;
 				(*tp)[j++] = c;
 				break;
 			case '\'':
@@ -896,9 +901,6 @@ char *tosh_eval_inline(char *line) {
 		close(backpipe_fd[1]);
 		close(topipe_fd[0]);
 
-		// Store PID of child.
-		TOSH_CHILDREN[TOSH_CHILDREN_SP++] = id;
-
 		buf = malloc(bufsize * sizeof(char));
 		if (!buf) {
 			fprintf(stderr, "tosh: memory allocation failed. :(\n");
@@ -916,9 +918,6 @@ char *tosh_eval_inline(char *line) {
 
 		// Kill subshell.
 		kill(id, SIGTERM);
-
-		// Remove PID of child.
-		TOSH_CHILDREN_SP--;
 
 		/* [NOTE: we really ought to implement dynamic buffer size adjustment here!!] */
 	
@@ -1005,17 +1004,22 @@ void tosh_load_config(void) {
 	;
 }
 
-/* 
- * Perform some general initialisation tasks.
- * (Usually) called once at startup.
- */
+/* Perform some general initialisation tasks.
+ * (Usually) called once at startup. */
 void tosh_init(void) {
-	char* cwd;
+	char *cwd, *str;
+
 	// Store current directory (as previous directory for later).
 	cwd = malloc(TOSH_MAX_PATH * sizeof(char));
 	getcwd(cwd, TOSH_MAX_PATH * sizeof(char));
 	strcpy(TOSH_LAST_DIR, cwd);
 	free(cwd);
+
+	// Increment shell level count.
+	str = malloc(128 * sizeof(char));
+	sprintf(str, "%d", atoi(ENV_SHLVL) + 1);
+	setenv("SHLVL", str , 1);
+	free(str);
 }
 
 /* ---- BUILTINS BELOW ---- */
