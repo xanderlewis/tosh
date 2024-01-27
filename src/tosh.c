@@ -13,6 +13,9 @@
 #define MAX_PROMPT        128
 #define MAX_CHILD         128
 #define TOSH_COMMENT_CHAR '#'
+#define TOSH_MAX_PATH     4096 // There is often a symbolic constant PATH_MAX defined in
+			       // <limits.h> on POSIX systems, but on macOS there either
+			       // isn't a limit or it isn't defined in this way.
 
 #define RED    "\x1B[31m"
 #define GRN    "\x1B[32m"
@@ -25,7 +28,6 @@
 #define BLDRS  "\033[0m"
 #define RESET  "\x1B[0m"
 
-#define UPARRW "^[[A"
 
 #define DEBUG_LOG(A, ...) if (strcmp(TOSH_DEBUG, "ON") == 0) {\
 			  	fprintf(stderr, BLD "log: " A BLDRS "\n", __VA_ARGS__);\
@@ -36,6 +38,9 @@ FILE *TOSH_HIST_FILE;
 
 // Pointer to the global struct used for receiving globbing information
 glob_t *TOSH_GLOB_STRUCT_PTR;
+
+// (Chronologically) previous directory
+char TOSH_LAST_DIR[TOSH_MAX_PATH]; // [note: 256 bytes is the max length of a dirname in Unix]
 
 // Global stack of PIDs of child processes
 pid_t TOSH_CHILDREN[MAX_CHILD];
@@ -130,28 +135,32 @@ void tosh_open_hist(void);
 void tosh_close_hist(void);
 void tosh_sync_env_vars(void);
 void tosh_load_config(void);
+void tosh_init(void);
 
 
 int main(int argc, char **argv) {
-	// Parse arguments to tosh
+	// Parse (external) arguments to tosh.
 	tosh_parse_args(argc, argv);
 
 	// Load config file. [none, for now.]
 	tosh_load_config();
 	
-	// Set up signal handlers
+	// Set up signal handlers.
 	tosh_bind_signals();
 
-	// Sync with environment variables
+	// Sync with environment variables.
 	tosh_sync_env_vars();
 
-	// Open history file
+	// Do general initialisation stuff.
+	tosh_init();
+
+	// Open history file.
 	tosh_open_hist();
 
 	// Run command loop.
 	tosh_loop(1);
 
-	// Close history file
+	// Close history file.
 	tosh_close_hist();
 
 	// GREAT SUCCESS!!!
@@ -338,7 +347,7 @@ char **tosh_split_line(char *line) {
 			case EOF:
 			case '\n':
 			case '\0':
-			case '#':
+			case TOSH_COMMENT_CHAR:
 				if (bl != 0) {
 					fprintf(stderr, "tosh: mismatched brackets. :(\n");
 					return NULL;
@@ -996,10 +1005,38 @@ void tosh_load_config(void) {
 	;
 }
 
+/* 
+ * Perform some general initialisation tasks.
+ * (Usually) called once at startup.
+ */
+void tosh_init(void) {
+	char* cwd;
+	// Store current directory (as previous directory for later).
+	cwd = malloc(TOSH_MAX_PATH * sizeof(char));
+	getcwd(cwd, TOSH_MAX_PATH * sizeof(char));
+	strcpy(TOSH_LAST_DIR, cwd);
+	free(cwd);
+}
+
 /* ---- BUILTINS BELOW ---- */
 
 int tosh_cd(char **args) {
-	if (args[1] == NULL) {
+	int argc;
+	char *arg, *cwd, *lastdir;
+
+	for (argc = 0; args[argc] != NULL; argc++)
+		;
+
+	// Save current directory for later.
+	cwd = malloc(TOSH_MAX_PATH * sizeof(char));
+	if (!cwd) {
+		fprintf(stderr, "tosh: memory allocation failed. :(\n");
+		exit(EXIT_FAILURE);
+	}
+	getcwd(cwd, TOSH_MAX_PATH * sizeof(char));
+
+	// No arguments to cd; go home.
+	if ((arg = args[1]) == NULL) {
 		char *homedir = getenv("HOME");
 		if (homedir != NULL) {
 			args[1] = malloc((strlen(homedir) + 1) * sizeof(char));
@@ -1012,12 +1049,42 @@ int tosh_cd(char **args) {
 		} else {
 			fprintf(stderr, "tosh: I couldn't find your home directory. :(\n");
 		}
-	} else {
-		// Attempt to change working directory of (this) process.
-		if (chdir(args[1]) != 0) {
-			perror("tosh");
+
+	// We have some arguments...
+	} else if (argc == 2) {
+		if (strcmp(args[1], "-") == 0) {
+			// Get last dir
+			lastdir = malloc(TOSH_MAX_PATH * sizeof(char));
+			if (!lastdir) {
+				fprintf(stderr, "tosh: memory allocation failed. :(\n");
+				exit(EXIT_FAILURE);
+			}
+			strcpy(lastdir, TOSH_LAST_DIR);
+			strcpy(TOSH_LAST_DIR, cwd);
+
+			// Go to (chronologically) previous directory.
+			if (chdir(lastdir) != 0) {
+				perror("tosh");
+			}
+			free(lastdir);
+
+		} else {
+			// Store current working directory for later.
+			if (strcmp(cwd, TOSH_LAST_DIR) != 0) {
+				strcpy(TOSH_LAST_DIR, cwd);
+			}
+			// Change working directory of process to specified directory.
+			if (chdir(args[1]) != 0) {
+				perror("tosh");
+			}
 		}
+	} else {
+		// More than one argument to cd.
+		fprintf(stderr, "tosh: Where do you want to go?\n");
 	}
+
+	free(cwd);
+	
 	// Signal to continue.
 	return 1;
 }
