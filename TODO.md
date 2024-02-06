@@ -31,4 +31,8 @@
 - [ ] add: environment variable substitution
 - [x] fix: subshells execute in non-verbose mode, regardless of parent
 - [x] fix: some arguments being dropped (probably a buffer-related problem)
-- [ ] add: `!!` expands to last entered command line
+- [ ] add: `!!` expands (anywhere on a line) to last-entered command line
+- [ ] add: support for escaping `$` signs
+- [ ] fix: bracket parsing issue (should pair *furthest apart* brackets)
+- [ ] fix: substitution and spaces issue
+- [ ] sort out how environment variables should be managed

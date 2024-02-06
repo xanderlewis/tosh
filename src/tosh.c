@@ -45,6 +45,8 @@ glob_t *TOSH_GLOB_STRUCT_PTR;
 
 // (Chronologically) previous directory
 char TOSH_LAST_DIR[TOSH_MAX_PATH]; // [note: 256 bytes is the max length of a dirname in Unix]
+char *TOSH_LAST_LINE;
+
 
 char *tosh_colours[] = {
 	RED,
@@ -314,11 +316,9 @@ char **tosh_split_line(char *line) {
 				break;
 			case '\\':
 				if (line[i] == '\'') {
-					printf("we have an escaped quote.\n");
 					(*tp)[j++] = '\'';
 					i++;
 				} else if (line[i] == '\\') {
-					printf("we have an escaped backslash.\n");
 					(*tp)[j++] = '\\';
 					i++;
 				} 
@@ -565,13 +565,24 @@ char *tosh_expand_tilde(char *str) {
 	return tosh_expand_tilde(str);
 }
 
-/* Expand expressions that are intended to be evaluated (e.g. '$PATH') in the given string.
- * As with tosh_expand_tilde(), takes a pointer that is assumed to have been malloc'd earlier;
- * requires freeing later. */
-char *tosh_expand_expressions(char *str) {
-	return "";
-}
+/* Expand instances of `!!` in the given string.
+ * NOTE: takes a char pointer that is assumed to have been malloc'd earlier; requires freeing later. */
+char *tosh_expand_bang(char *str) {
+	int si, ei;
 
+	// Find a bang.
+	for (si = 0; str[i] != '\0' && str[i] != '!'; i++)
+		;
+
+	if (str[i] != '\0' && str[i+1] == '!') {
+		ei = i + 1;
+	} else {
+		return str;
+	}
+
+	// (assuming TOSH_LAST_LINE is a string that contains the last executed command line)
+	tosh_str_substitute(str, 
+}
 
 // Forward declarations for tosh_expand_args.
 char **tosh_glob_string(char *);
@@ -595,7 +606,7 @@ char **tosh_expand_args(char **args) {
 		args[i] = tosh_expand_tilde(args[i]);
 		DEBUG_LOG("tilde expanded into %s.", args[i]);
 
-		// Expand any $(EXPRESSION)s (for now, only the first occurrence we find).
+		// Expand any $(EXPRESSION)s (expand until none left -- slightly inefficient but fine for our purposes).
 		if ((newarg = tosh_expand_expression(args[i])) != NULL) {
 			args[i] = newarg;
 		} else {
@@ -737,7 +748,7 @@ void tosh_glob_free(void) {
 
 // Forward declarations for tosh_expand_expression().
 int tosh_locate_expression(char *, int *, int *, int *, int *);
-char *tosh_eval_inline(char *);
+char *tosh_eval_line(char *);
 char *tosh_str_substitute(char *, int, int, char *);
 
 /* Expand the first expression to be substituted found in the string str.
@@ -765,7 +776,7 @@ char *tosh_expand_expression(char *str) {
 	memcpy(expr, &str[si], strlen(str) - si);
 	expr[ei - si] = '\0';
 	DEBUG_LOG("evaluating: '%s'...", expr);
-	result = tosh_eval_inline(expr);
+	result = tosh_eval_line(expr);
 	free(expr);
 	DEBUG_LOG("evaluated to: '%s'", result);
 	
@@ -792,16 +803,22 @@ int tosh_locate_expression(char *str, int *si, int *ei, int *rsi, int *rei) {
 	// Didn't find one.
 	if (str[i] == '\0')
 		return 0;
+
+	// If dollar sign has been escaped...
+	if ((i > 0) && str[i - 1] == '\\') {
+		// TODO: fill this in.
+	}
+
 	*si = i + 1;
 	*rsi = i;
 
 	if (str[++i] == '(') {
 		// If next char is an opening bracket, look for a closing one.
 		(*si)++;
-		for (; str[i] != ')' && str[i] != '\0'; i++)
+		for (i = strlen(str) - 1; i >= 0 && str[i] != ')'; i--)
 			;
 		// Didn't find one.
-		if (str[i] == '\0')
+		if (i == 0)
 			return 0;
 		*ei = i;
 		*rei = i + 1;
@@ -851,7 +868,7 @@ char *tosh_str_substitute(char *str, int si, int ei, char *substr) {
  * ready for substitution (usually).
  * Returns a dynamically allocated string; requires freeing later.
  * For now, we strip the final newline in the result, but don't worry about others. */
-char *tosh_eval_inline(char *line) {
+char *tosh_eval_line(char *line) {
 	pid_t id;
 	int backpipe_fd[2];
 	int topipe_fd[2];
@@ -889,6 +906,7 @@ char *tosh_eval_inline(char *line) {
 		// Execute command line (non-looping).
 		TOSH_DEBUG = "OFF";
 		TOSH_VERBOSE = "OFF";
+		tosh_init();
 		tosh_loop(0);
 
 		// (We usually shouldn't end up here.)
@@ -984,7 +1002,7 @@ void tosh_open_hist(void) {
 	strcpy(path, TOSH_HIST_PATH);
 	expanded_path = tosh_expand_tilde(path);
 
-	TOSH_HIST_FILE = fopen(expanded_path, "r+");
+	TOSH_HIST_FILE = fopen(expanded_path, "a+");
 	free(expanded_path);
 
 	if (TOSH_HIST_FILE == NULL) {
